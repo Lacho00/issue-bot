@@ -62,3 +62,14 @@ test('siteQuery: etiqueta más larga sin TLD ni www', () => {
   assert.equal(siteQuery('tienda-demo.com'), 'tienda-demo');
   assert.equal(siteQuery('shop.pinar-demo.example.com'), 'pinar-demo');
 });
+
+test('URLs followed by typographic quotes', () => {
+  assert.deepEqual(
+    extractHosts(`mira https://tienda-demo.com” gracias`),
+    ['tienda-demo.com'],
+  );
+  assert.deepEqual(
+    extractHosts(`mira https://tienda-demo.com’ gracias`),
+    ['tienda-demo.com'],
+  );
+});

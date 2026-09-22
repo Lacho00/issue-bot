@@ -1,7 +1,7 @@
 import { normalizeHost } from './site-index.js';
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'()[\]{}]+|\bwww\.[^\s<>"'()[\]{}]+/gi;
-const TRAIL = /[.,;:!?¿¡»«"'"')\]]+$/;
+const TRAIL = /[.,;:!?¿¡»«"”'’)\]]+$/;
 
 export function extractHosts(text, entities) {
   const s = String(text ?? '');
