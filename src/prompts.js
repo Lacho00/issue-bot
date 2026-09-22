@@ -4,7 +4,6 @@ Sitio: ${site} (${sitePath}). Carpeta del trabajo: ${jobDir}. Capturas del dueñ
 Escribe en español, frases cortas, sin tablas decorativas. Telegram no renderiza Markdown complejo:
 usa listas simples y bloques de código cortos.
 Nunca hagas git commit ni git push. Nunca instales Playwright ni navegadores.
-Antes de empezar, lee con Read el CLAUDE.md y .claude/CLAUDE.md del sitio si existen.
 Si necesitas algo del dueño, pregúntalo en texto al final de tu respuesta.`;
 
 const PLAN = `

@@ -16,7 +16,7 @@ test('buildArgs: primer turno usa --session-id, luego --resume', () => {
   assert.ok(first.includes('--permission-prompt-tool'));
   assert.equal(first[first.indexOf('--permission-mode') + 1], 'plan');
   assert.equal(first[first.indexOf('--settings') + 1], '{"a":1}');
-  assert.equal(first[first.indexOf('--setting-sources') + 1], 'user');
+  assert.equal(first[first.indexOf('--setting-sources') + 1], 'user,project,local');
   const next = buildArgs({ ...common, resume: true });
   assert.equal(next[next.indexOf('--resume') + 1], 'u');
   assert.ok(!next.includes('--session-id'));

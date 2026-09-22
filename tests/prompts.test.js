@@ -12,9 +12,9 @@ test('plan: solo lectura, formato de plan y valores medidos', () => {
   assert.match(p, /tienda-demo/);
 });
 
-test('ambas fases piden leer el CLAUDE.md del sitio (no se carga solo)', () => {
-  assert.match(systemPrompt({ ...ctx, phase: 'plan' }), /Read.*CLAUDE\.md/i);
-  assert.match(systemPrompt({ ...ctx, phase: 'implement' }), /Read.*CLAUDE\.md/i);
+test('ninguna fase pide leer el CLAUDE.md: se carga solo con --setting-sources', () => {
+  assert.doesNotMatch(systemPrompt({ ...ctx, phase: 'plan' }), /CLAUDE\.md/);
+  assert.doesNotMatch(systemPrompt({ ...ctx, phase: 'implement' }), /CLAUDE\.md/);
 });
 
 test('implement: solo lo aprobado, informe en la carpeta del trabajo', () => {
