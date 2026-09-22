@@ -1,0 +1,4 @@
+.env
+state.json
+node_modules/
+.codebase-memory/
