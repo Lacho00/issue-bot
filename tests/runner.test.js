@@ -22,14 +22,20 @@ test('buildArgs: primer turno usa --session-id, luego --resume', () => {
   assert.ok(!next.includes('--session-id'));
 });
 
-test('turno correcto devuelve texto, sesión y tokens de contexto', async () => {
+test('turno correcto devuelve texto, sesión y tokens de contexto del último assistant', async () => {
   const events = [];
   const r = await run('ok', { onEvent: (e) => events.push(e.type) }).promise;
   assert.equal(r.ok, true);
   assert.equal(r.text, 'eco: hola');
   assert.equal(r.sessionSeen, true);
-  assert.equal(r.contextTokens, 1015);
+  // usa message.usage del último evento assistant (20+300+7=327), no el result.usage (10+1000+5=1015)
+  assert.equal(r.contextTokens, 327);
   assert.deepEqual(events, ['system', 'assistant', 'result']);
+});
+
+test('sin usage en eventos assistant: usa result.usage como respaldo', async () => {
+  const r = await run('no-assistant-usage').promise;
+  assert.equal(r.contextTokens, 1015);
 });
 
 test('error del resultado se marca isError', async () => {

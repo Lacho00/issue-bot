@@ -6,7 +6,15 @@ process.stdin.on('end', () => {
   const emit = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
   if (mode === 'crash') { process.stderr.write('boom\n'); process.exit(2); }
   emit({ type: 'system', subtype: 'init', session_id: 'abc' });
-  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/x/functions.php' } }] } });
+  if (mode !== 'no-assistant-usage') {
+    emit({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/x/functions.php' } }],
+        usage: { input_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 7, output_tokens: 12 },
+      },
+    });
+  }
   if (mode === 'stubborn') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); return; }
   if (mode === 'hang') { setInterval(() => {}, 1000); return; }
   if (mode === 'error') {

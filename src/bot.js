@@ -272,6 +272,7 @@ async function runTurn() {
       timeoutMs: cfg.turnTimeoutMs,
       env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
       onEvent: (e) => {
+        if (e.type === 'system' && e.subtype === 'init' && !store.job?.started) store.markStarted();
         const s = statusFromEvent(e);
         if (!s || Date.now() - lastEdit < 4000) return;
         lastEdit = Date.now();

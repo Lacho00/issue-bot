@@ -29,6 +29,7 @@ export function startTurn({ bin, cwd, args, prompt, timeoutMs, env = {}, onEvent
   let timedOut = false;
   let result = null;
   let sessionSeen = false;
+  let lastAssistantUsage = null;
   let stderr = '';
   let buf = '';
   let settled = false;
@@ -57,7 +58,7 @@ export function startTurn({ bin, cwd, args, prompt, timeoutMs, env = {}, onEvent
     settled = true;
     if (timer) clearTimeout(timer);
     if (killTimer) clearTimeout(killTimer);
-    const u = result?.usage ?? {};
+    const u = lastAssistantUsage ?? result?.usage ?? {};
     return {
       ok: !!result && !result.is_error && !timedOut && !killed,
       text: result?.result ?? '',
@@ -81,6 +82,7 @@ export function startTurn({ bin, cwd, args, prompt, timeoutMs, env = {}, onEvent
       let event;
       try { event = JSON.parse(line); } catch { continue; }
       if (event.type === 'system' && event.subtype === 'init') sessionSeen = true;
+      if (event.type === 'assistant' && event.message?.usage) lastAssistantUsage = event.message.usage;
       if (event.type === 'result') result = event;
       onEvent(event);
     }
