@@ -14,7 +14,7 @@ test('settings permiten editar solo en el sitio y en la carpeta del trabajo', ()
 });
 
 test('segunda capa deniega commit, push e instalación de Playwright', () => {
-  for (const command of ['git commit -m x', 'cd a && git push', 'npx playwright install chromium', 'npm i -D playwright', 'npm install @playwright/test']) {
+  for (const command of ['git commit -m x', 'cd a && git push', 'npx playwright install chromium', 'npm i -D playwright', 'npm install @playwright/test', 'yarn add playwright', 'pnpm add -D @playwright/test', 'bun add playwright', 'GIT COMMIT -m x']) {
     assert.equal(decidePermission('Bash', { command }).action, 'deny', command);
   }
   assert.equal(decidePermission('mcp__playwright__browser_install', {}).action, 'deny');

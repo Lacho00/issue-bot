@@ -39,9 +39,9 @@ export function buildSettings({ sitePath, jobDir }) {
 }
 
 const FORBIDDEN = [
-  /\bgit\s+(commit|push)\b/,
-  /\bplaywright\s+install\b/,
-  /\bnpm\s+(i|install|add)\b[^&|;]*playwright/,
+  /\bgit\s+(commit|push)\b/i,
+  /\bplaywright\s+install\b/i,
+  /\b(npm|pnpm|yarn|bun)\s+(i|install|add)\b[^&|;]*playwright/i,
 ];
 
 export function decidePermission(toolName, input = {}) {
