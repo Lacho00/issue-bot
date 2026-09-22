@@ -42,6 +42,13 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath }) {
       deny: [
         'Bash(git commit:*)',
         'Bash(git push:*)',
+        'Bash(git add:*)',
+        'Bash(git reset --hard:*)',
+        'Bash(git checkout -- :*)',
+        'Bash(git clean:*)',
+        'Bash(wp db drop:*)',
+        'Bash(wp db reset:*)',
+        'Bash(wp db import:*)',
         'Bash(npx playwright install:*)',
         'Bash(npm i playwright:*)',
         'Bash(npm install playwright:*)',
@@ -53,8 +60,15 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath }) {
   };
 }
 
+// Admite opciones globales delante del subcomando: git -C <ruta> add, wp --path=<ruta> db drop.
+const GIT = String.raw`\bgit\s+(?:-C\s+\S+\s+)*`;
+const WP = String.raw`\bwp\s+(?:--\S+\s+)*`;
+
 const FORBIDDEN = [
-  /\bgit\s+(commit|push)\b/i,
+  new RegExp(String.raw`${GIT}(commit|push|add|clean)\b`, 'i'),
+  new RegExp(String.raw`${GIT}reset\b[^&|;]*\s--hard\b`, 'i'),
+  new RegExp(String.raw`${GIT}checkout\b[^&|;]*\s--(\s|$)`, 'i'),
+  new RegExp(String.raw`${WP}db\s+(drop|reset|import)\b`, 'i'),
   /\bplaywright\s+install\b/i,
   /\b(npm|pnpm|yarn|bun)\s+(i|install|add)\b[^&|;]*playwright/i,
 ];
@@ -69,7 +83,7 @@ export function decidePermission(toolName, input = {}) {
     return { action: 'deny', message: 'Prohibido: sin instalar navegadores ni ejecutar código sin sandbox.' };
   }
   if (toolName === 'Bash' && FORBIDDEN.some((re) => re.test(input.command ?? ''))) {
-    return { action: 'deny', message: 'Comando prohibido en este bot: sin commit, sin push, sin instalar Playwright.' };
+    return { action: 'deny', message: 'Comando prohibido en este bot: sin git commit, push, add, reset --hard, checkout -- ni clean; sin wp db drop, reset ni import; sin instalar Playwright.' };
   }
   return { action: 'ask' };
 }

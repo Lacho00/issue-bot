@@ -75,3 +75,39 @@ test('describeRequest resume comando o ruta', () => {
   assert.equal(describeRequest('Edit', { file_path: '/etc/hosts' }), 'Edit: /etc/hosts');
   assert.ok(describeRequest('Otro', { a: 'x'.repeat(2000) }).length <= 700);
 });
+
+const SETTINGS_ARGS = { sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' };
+
+test('settings: deny de git y wp db destructivos en ambas fases, sin perder los de antes', () => {
+  const rules = [
+    'Bash(git add:*)', 'Bash(git reset --hard:*)', 'Bash(git checkout -- :*)', 'Bash(git clean:*)',
+    'Bash(wp db drop:*)', 'Bash(wp db reset:*)', 'Bash(wp db import:*)',
+    'Bash(git commit:*)', 'Bash(git push:*)', 'Bash(npx playwright install:*)', 'Bash(npm i playwright:*)',
+    'Bash(npm install playwright:*)', 'mcp__playwright__browser_install', 'mcp__playwright__browser_run_code_unsafe',
+    'Read(//srv/http/issue-bot/.env)',
+  ];
+  for (const phase of ['plan', 'implement']) {
+    const s = buildSettings({ ...SETTINGS_ARGS, phase });
+    for (const rule of rules) assert.ok(s.permissions.deny.includes(rule), `${phase}: ${rule}`);
+  }
+});
+
+test('segunda capa deniega git add, reset --hard, checkout --, clean y wp db drop/reset/import', () => {
+  for (const command of [
+    'git add .', 'git add -A', 'cd x && git add style.css', 'git -C /srv/http/tienda-demo add style.css',
+    'git reset --hard', 'git reset HEAD~1 --hard', 'git checkout -- style.css', 'git checkout HEAD -- style.css',
+    'git clean -fd', 'wp db drop --yes', 'wp db reset --yes', 'wp db import copia.sql',
+    'wp --path=/srv/http/tienda-demo db import copia.sql',
+  ]) {
+    assert.equal(decidePermission('Bash', { command }).action, 'deny', command);
+  }
+});
+
+test('variantes no destructivas se siguen preguntando', () => {
+  for (const command of [
+    'git checkout -b arreglo', 'git checkout --theirs style.css', 'git reset HEAD style.css', 'git stash',
+    'git log --grep add', 'wp db export copia.sql', 'wp db query "SELECT 1"',
+  ]) {
+    assert.deepEqual(decidePermission('Bash', { command }), { action: 'ask' }, command);
+  }
+});
