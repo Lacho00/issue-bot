@@ -24,6 +24,8 @@ if (!cfg.token) {
   process.exit(1);
 }
 
+const redact = (s) => String(s).split(cfg.token).join('<token>');
+
 const bot = new Bot(cfg.token);
 const store = new Store(cfg.statePath);
 store.load();
@@ -149,8 +151,13 @@ bot.on('message:text', async (ctx) => {
 bot.on('message:photo', async (ctx) => {
   if (!store.job) return receive(ctx, { type: 'text', text: '(captura enviada antes de /nuevo: reenvíala)' });
   const photo = ctx.message.photo.at(-1);
-  const dest = await downloadFile(photo.file_id, 'jpg');
-  await receive(ctx, { type: 'image', path: dest });
+  let dest;
+  try {
+    dest = await downloadFile(photo.file_id, 'jpg');
+  } catch (e) {
+    await ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+  }
+  if (dest) await receive(ctx, { type: 'image', path: dest });
   if (ctx.message.caption) await receive(ctx, { type: 'text', text: ctx.message.caption });
 });
 
@@ -158,8 +165,13 @@ bot.on('message:document', async (ctx) => {
   const doc = ctx.message.document;
   if (!doc.mime_type?.startsWith('image/')) return ctx.reply('Solo acepto imágenes como archivo.');
   if (!store.job) return receive(ctx, { type: 'text', text: '(captura enviada antes de /nuevo: reenvíala)' });
-  const dest = await downloadFile(doc.file_id, doc.mime_type.split('/')[1]);
-  await receive(ctx, { type: 'image', path: dest });
+  let dest;
+  try {
+    dest = await downloadFile(doc.file_id, doc.mime_type.split('/')[1]);
+  } catch (e) {
+    await ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+  }
+  if (dest) await receive(ctx, { type: 'image', path: dest });
   if (ctx.message.caption) await receive(ctx, { type: 'text', text: ctx.message.caption });
 });
 
@@ -179,13 +191,13 @@ async function requestPlan(ctx) {
 
 bot.callbackQuery('dirty:go', async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageReplyMarkup();
+  await ctx.editMessageReplyMarkup().catch(() => {});
   return say('Sigo. Mándame los issues y termina con /plan.');
 });
 
 bot.callbackQuery('dirty:cancel', async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageReplyMarkup();
+  await ctx.editMessageReplyMarkup().catch(() => {});
   if (store.job && !busy) store.close();
   return say('Trabajo cancelado.');
 });
@@ -194,7 +206,7 @@ bot.callbackQuery('approve', async (ctx) => {
   await ctx.answerCallbackQuery();
   if (busy) return say('Claude sigue trabajando; espera a que termine.');
   try { store.approve(); } catch { return say('No hay ningún plan pendiente de aprobar.'); }
-  await ctx.editMessageReplyMarkup();
+  await ctx.editMessageReplyMarkup().catch(() => {});
   store.addPending({ type: 'text', text: 'Plan aprobado. Implementa lo aprobado y escribe el informe.' });
   return runTurn();
 });
@@ -213,6 +225,7 @@ bot.callbackQuery(/^perm:(.+):(allow|deny)$/, async (ctx) => {
 async function onPermission({ tool_name, input }) {
   const decision = decidePermission(tool_name, input);
   if (decision.action === 'deny') return { behavior: 'deny', message: decision.message };
+  if (!busy) return { behavior: 'deny', message: 'No hay turno en curso.' };
   const id = randomUUID().slice(0, 8);
   const text = `Permiso: ${describeRequest(tool_name, input)}`;
   const kb = new InlineKeyboard().text('Permitir', `perm:${id}:allow`).text('Denegar', `perm:${id}:deny`);
@@ -236,58 +249,61 @@ async function runTurn() {
   const job = store.job;
   if (!job || busy) return;
   busy = true;
-  const phase = job.phase === 'implement' ? 'implement' : 'plan';
-  const items = store.takePending();
-  const status = await say(phase === 'plan' ? 'Analizando…' : 'Implementando…');
-  let lastEdit = 0;
+  try {
+    const phase = job.phase === 'implement' ? 'implement' : 'plan';
+    const items = store.takePending();
+    const status = await say(phase === 'plan' ? 'Analizando…' : 'Implementando…');
+    let lastEdit = 0;
 
-  const args = buildArgs({
-    sessionId: job.sessionId,
-    resume: job.started,
-    mode: phase === 'plan' ? 'plan' : 'manual',
-    systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
-    settings: buildSettings({ sitePath: job.sitePath, jobDir: job.jobDir }),
-    mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
-  });
+    const args = buildArgs({
+      sessionId: job.sessionId,
+      resume: job.started,
+      mode: phase === 'plan' ? 'plan' : 'manual',
+      systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
+      settings: buildSettings({ sitePath: job.sitePath, jobDir: job.jobDir }),
+      mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
+    });
 
-  const turn = startTurn({
-    bin: cfg.claudeBin,
-    cwd: job.sitePath,
-    args,
-    prompt: userMessage(items),
-    timeoutMs: cfg.turnTimeoutMs,
-    env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
-    onEvent: (e) => {
-      const s = statusFromEvent(e);
-      if (!s || Date.now() - lastEdit < 4000) return;
-      lastEdit = Date.now();
-      bot.api.editMessageText(cfg.ownerId, status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
-    },
-  });
-  killCurrent = turn.kill;
-  const r = await turn.promise;
-  killCurrent = null;
-  busy = false;
+    const turn = startTurn({
+      bin: cfg.claudeBin,
+      cwd: job.sitePath,
+      args,
+      prompt: userMessage(items),
+      timeoutMs: cfg.turnTimeoutMs,
+      env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
+      onEvent: (e) => {
+        const s = statusFromEvent(e);
+        if (!s || Date.now() - lastEdit < 4000) return;
+        lastEdit = Date.now();
+        bot.api.editMessageText(cfg.ownerId, status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
+      },
+    });
+    killCurrent = turn.kill;
+    const r = await turn.promise;
 
-  if (r.sessionSeen && !job.started) store.markStarted();
-  if (r.contextTokens) store.setContextTokens(r.contextTokens);
-  await bot.api.deleteMessage(cfg.ownerId, status.message_id).catch(() => {});
+    if (r.sessionSeen && !job.started) store.markStarted();
+    if (r.contextTokens) store.setContextTokens(r.contextTokens);
+    await bot.api.deleteMessage(cfg.ownerId, status.message_id).catch(() => {});
 
-  if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
-  else if (r.killed) await say('Turno cancelado. Escribe «sigue» para retomarlo.');
-  else if (r.isError) {
-    const limit = /limit/i.test(r.text) ? 'Límite de uso alcanzado. ' : '';
-    await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
-  } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
-  else if (phase === 'plan') {
-    await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', 'approve') });
-  } else {
-    await say(r.text || 'Implementación terminada.');
-    await deliverReport();
-  }
+    if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
+    else if (r.killed) await say('Turno cancelado. Escribe «sigue» para retomarlo.');
+    else if (r.isError) {
+      const limit = /limit/i.test(r.text) ? 'Límite de uso alcanzado. ' : '';
+      await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
+    } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
+    else if (phase === 'plan') {
+      await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', 'approve') });
+    } else {
+      await say(r.text || 'Implementación terminada.');
+      await deliverReport();
+    }
 
-  if (store.job && store.job.contextTokens > cfg.contextWarnTokens) {
-    await say(`El contexto va por ${store.job.contextTokens} tokens. Conviene /cerrar y abrir otro trabajo.`);
+    if (store.job && store.job.contextTokens > cfg.contextWarnTokens) {
+      await say(`El contexto va por ${store.job.contextTokens} tokens. Conviene /cerrar y abrir otro trabajo.`);
+    }
+  } finally {
+    busy = false;
+    killCurrent = null;
   }
   if (store.job?.pending.length && store.job.phase !== 'collecting') {
     if (store.job.phase === 'reported') store.startPlan();
@@ -314,7 +330,7 @@ async function deliverReport() {
 
 // --- Arranque ---------------------------------------------------------------
 
-bot.catch((err) => console.error('Error del bot:', err.error ?? err));
+bot.catch((err) => console.error('Error del bot:', redact(err.error?.stack ?? err.error ?? err)));
 
 await startBridge(cfg.socketPath, onPermission);
 
