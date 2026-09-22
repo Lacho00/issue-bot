@@ -12,6 +12,11 @@ test('plan: solo lectura, formato de plan y valores medidos', () => {
   assert.match(p, /tienda-demo/);
 });
 
+test('ambas fases piden leer el CLAUDE.md del sitio (no se carga solo)', () => {
+  assert.match(systemPrompt({ ...ctx, phase: 'plan' }), /Read.*CLAUDE\.md/i);
+  assert.match(systemPrompt({ ...ctx, phase: 'implement' }), /Read.*CLAUDE\.md/i);
+});
+
 test('implement: solo lo aprobado, informe en la carpeta del trabajo', () => {
   const p = systemPrompt({ ...ctx, phase: 'implement' });
   assert.match(p, /solo lo aprobado/i);

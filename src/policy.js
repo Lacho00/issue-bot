@@ -1,16 +1,29 @@
 const abs = (p) => `/${p}`;
 
-export function buildSettings({ sitePath, jobDir }) {
+const PLAYWRIGHT_TOOLS = [
+  'navigate', 'snapshot', 'take_screenshot', 'evaluate', 'resize', 'click',
+  'wait_for', 'console_messages', 'network_requests', 'close', 'tabs', 'hover', 'press_key',
+].map((t) => `mcp__playwright__browser_${t}`);
+
+const CODEBASE_MEMORY_TOOLS = [
+  'search_graph', 'trace_path', 'get_code_snippet', 'get_architecture', 'query_graph',
+  'search_code', 'list_projects', 'index_status', 'detect_changes', 'get_graph_schema',
+].map((t) => `mcp__codebase-memory-mcp__${t}`);
+
+export function buildSettings({ phase, sitePath, jobDir, botEnvPath }) {
   const dirs = [sitePath, jobDir];
+  const editAllows = phase === 'plan'
+    ? []
+    : dirs.flatMap((d) => [`Edit(${abs(d)}/**)`, `Write(${abs(d)}/**)`, `MultiEdit(${abs(d)}/**)`]);
+  const buildAllows = phase === 'plan' ? [] : ['Bash(npm run build)', 'Bash(npm run build:*)'];
   return {
     permissions: {
       allow: [
         'Read',
         'Glob',
         'Grep',
-        ...dirs.flatMap((d) => [`Edit(${abs(d)}/**)`, `Write(${abs(d)}/**)`, `MultiEdit(${abs(d)}/**)`]),
-        'Bash(npm run build)',
-        'Bash(npm run build:*)',
+        ...editAllows,
+        ...buildAllows,
         'Bash(git status:*)',
         'Bash(git diff:*)',
         'Bash(git log:*)',
@@ -23,8 +36,8 @@ export function buildSettings({ sitePath, jobDir }) {
         'Bash(wp theme list:*)',
         'Bash(wp plugin list:*)',
         'Bash(chromium --headless:*)',
-        'mcp__playwright',
-        'mcp__codebase-memory-mcp',
+        ...PLAYWRIGHT_TOOLS,
+        ...CODEBASE_MEMORY_TOOLS,
       ],
       deny: [
         'Bash(git commit:*)',
@@ -33,6 +46,8 @@ export function buildSettings({ sitePath, jobDir }) {
         'Bash(npm i playwright:*)',
         'Bash(npm install playwright:*)',
         'mcp__playwright__browser_install',
+        'mcp__playwright__browser_run_code_unsafe',
+        `Read(${abs(botEnvPath)})`,
       ],
     },
   };
@@ -44,12 +59,14 @@ const FORBIDDEN = [
   /\b(npm|pnpm|yarn|bun)\s+(i|install|add)\b[^&|;]*playwright/i,
 ];
 
+const DENIED_TOOLS = new Set(['mcp__playwright__browser_install', 'mcp__playwright__browser_run_code_unsafe']);
+
 export function decidePermission(toolName, input = {}) {
   if (toolName === 'ExitPlanMode' || toolName === 'AskUserQuestion') {
     return { action: 'deny', message: 'El dueño responde por Telegram. Termina tu respuesta con el plan o la pregunta en texto.' };
   }
-  if (toolName === 'mcp__playwright__browser_install') {
-    return { action: 'deny', message: 'Prohibido instalar navegadores. Usa el chromium existente.' };
+  if (DENIED_TOOLS.has(toolName)) {
+    return { action: 'deny', message: 'Prohibido: sin instalar navegadores ni ejecutar código sin sandbox.' };
   }
   if (toolName === 'Bash' && FORBIDDEN.some((re) => re.test(input.command ?? ''))) {
     return { action: 'deny', message: 'Comando prohibido en este bot: sin commit, sin push, sin instalar Playwright.' };

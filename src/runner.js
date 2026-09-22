@@ -5,6 +5,7 @@ export function buildArgs({ sessionId, resume, mode, systemPrompt, settings, mcp
   return [
     '-p', '--output-format', 'stream-json', '--verbose',
     resume ? '--resume' : '--session-id', sessionId,
+    '--setting-sources', 'user',
     '--permission-mode', mode,
     '--append-system-prompt', systemPrompt,
     '--settings', JSON.stringify(settings),

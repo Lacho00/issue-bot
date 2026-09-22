@@ -260,7 +260,7 @@ async function runTurn() {
       resume: job.started,
       mode: phase === 'plan' ? 'plan' : 'manual',
       systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
-      settings: buildSettings({ sitePath: job.sitePath, jobDir: job.jobDir }),
+      settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath }),
       mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
     });
 

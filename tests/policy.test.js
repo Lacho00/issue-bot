@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildSettings, decidePermission, describeRequest } from '../src/policy.js';
 
 test('settings permiten editar solo en el sitio y en la carpeta del trabajo', () => {
-  const s = buildSettings({ sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(s.permissions.allow.includes('Edit(//srv/http/tienda-demo/**)'));
   assert.ok(s.permissions.allow.includes('Write(//home/lacho/audits/tienda-demo/results/qa-2026-09-21/**)'));
   assert.ok(!s.permissions.allow.some((r) => r.startsWith('Edit(//srv/http/**')));
@@ -13,11 +13,49 @@ test('settings permiten editar solo en el sitio y en la carpeta del trabajo', ()
   assert.ok(s.permissions.deny.includes('Bash(npx playwright install:*)'));
 });
 
+test('plan: sin Edit/Write/MultiEdit ni npm run build', () => {
+  const s = buildSettings({ phase: 'plan', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  assert.ok(!s.permissions.allow.some((r) => /^(Edit|Write|MultiEdit)\(/.test(r)));
+  assert.ok(!s.permissions.allow.includes('Bash(npm run build)'));
+  assert.ok(!s.permissions.allow.includes('Bash(npm run build:*)'));
+});
+
+test('implement: sí incluye Edit/Write/MultiEdit y npm run build', () => {
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  assert.ok(s.permissions.allow.includes('Edit(//srv/http/tienda-demo/**)'));
+  assert.ok(s.permissions.allow.includes('MultiEdit(//srv/http/tienda-demo/**)'));
+  assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
+  assert.ok(s.permissions.allow.includes('Bash(npm run build:*)'));
+});
+
+test('playwright: solo herramientas explícitas, sin run_code_unsafe ni file_upload', () => {
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  assert.ok(!s.permissions.allow.includes('mcp__playwright'));
+  assert.ok(s.permissions.allow.includes('mcp__playwright__browser_navigate'));
+  assert.ok(s.permissions.allow.includes('mcp__playwright__browser_snapshot'));
+  assert.ok(!s.permissions.allow.some((r) => r === 'mcp__playwright__browser_run_code_unsafe'));
+  assert.ok(!s.permissions.allow.some((r) => r === 'mcp__playwright__browser_file_upload'));
+  assert.ok(s.permissions.deny.includes('mcp__playwright__browser_run_code_unsafe'));
+});
+
+test('codebase-memory: solo herramientas de lectura, sin wildcard', () => {
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  assert.ok(!s.permissions.allow.includes('mcp__codebase-memory-mcp'));
+  assert.ok(s.permissions.allow.includes('mcp__codebase-memory-mcp__search_graph'));
+  assert.ok(s.permissions.allow.includes('mcp__codebase-memory-mcp__trace_path'));
+});
+
+test('deniega leer el .env del propio bot', () => {
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  assert.ok(s.permissions.deny.includes('Read(//srv/http/issue-bot/.env)'));
+});
+
 test('segunda capa deniega commit, push e instalación de Playwright', () => {
   for (const command of ['git commit -m x', 'cd a && git push', 'npx playwright install chromium', 'npm i -D playwright', 'npm install @playwright/test', 'yarn add playwright', 'pnpm add -D @playwright/test', 'bun add playwright', 'GIT COMMIT -m x']) {
     assert.equal(decidePermission('Bash', { command }).action, 'deny', command);
   }
   assert.equal(decidePermission('mcp__playwright__browser_install', {}).action, 'deny');
+  assert.equal(decidePermission('mcp__playwright__browser_run_code_unsafe', {}).action, 'deny');
 });
 
 test('ExitPlanMode y AskUserQuestion se deniegan con instrucción', () => {
