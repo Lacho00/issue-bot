@@ -8,7 +8,7 @@ import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { run } from '@grammyjs/runner';
 import { ROOT, loadConfig, setEnvValue } from './config.js';
 import { splitMessage } from './telegram-util.js';
-import { authorizeMessage, authorizeCallback } from './auth.js';
+import { authorizeMessage, authorizeCallback, isForwarded } from './auth.js';
 import { resolveSite } from './sites.js';
 import { makeJobDir, localDate } from './jobdir.js';
 import { Store, StateError } from './state.js';
@@ -17,6 +17,7 @@ import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
 import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from './report.js';
+import { createBatchTimer } from './batch.js';
 
 const cfg = loadConfig();
 if (!cfg.token) {
@@ -33,8 +34,11 @@ store.load();
 
 let busy = false;
 let killCurrent = null;
-const orphans = [];
 const permissions = new Map();
+// Lote de mensajes: se cierra solo tras cfg.batchIdleMs sin mensajes nuevos (equivale a /plan).
+const batch = createBatchTimer(cfg.batchIdleMs, () => closeBatch());
+const idleText = () => (cfg.batchIdleMs >= 60_000 ? `${Math.round(cfg.batchIdleMs / 60_000)} min` : `${Math.round(cfg.batchIdleMs / 1000)} s`);
+const notFoundText = (name, site) => `No existe ${cfg.sitesRoot}/${name}.${site.suggestions.length ? `\n¿Quizá: ${site.suggestions.join(', ')}?` : ''}`;
 
 const PHASE_LABEL = { collecting: 'recogida', plan: 'plan', implement: 'implementación', reported: 'informe entregado' };
 
@@ -78,6 +82,9 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+// Los reenvíos son contenido de QA aunque empiecen por «/»: no pasan por los comandos.
+bot.use((ctx, next) => (ctx.message && isForwarded(ctx.message) ? handleContent(ctx) : next()));
+
 // --- Comandos ---------------------------------------------------------------
 
 bot.command('start', (ctx) => ctx.reply('Comandos: /nuevo <sitio>, /plan, /estado, /cancelar, /cerrar'));
@@ -86,31 +93,16 @@ bot.command('nuevo', async (ctx) => {
   if (store.job) return ctx.reply(`Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`);
   const name = ctx.match?.trim();
   if (!name) return ctx.reply('¿De qué sitio es? Usa /nuevo <sitio>.');
-  const site = resolveSite(name, cfg.sitesRoot);
-  if (!site.ok) {
-    const list = site.suggestions.length ? `\n¿Quizá: ${site.suggestions.join(', ')}?` : '';
-    return ctx.reply(`No existe ${cfg.sitesRoot}/${name}.${list}`);
-  }
-  const jobDir = makeJobDir(cfg.auditsRoot, site.name);
-  store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
-  for (const item of orphans.splice(0)) store.addPending(item);
-
-  let dirty = '';
-  try { dirty = execFileSync('git', ['-C', site.path, 'status', '--short'], { encoding: 'utf8' }).trim(); } catch { dirty = ''; }
-  if (dirty) {
-    const sid = store.job.sessionId.slice(0, 8);
-    const kb = new InlineKeyboard().text('Seguir', `dirty:go:${sid}`).text('Cancelar', `dirty:cancel:${sid}`);
-    return say(`Trabajo abierto en ${site.name}, pero el repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
-  }
-  return ctx.reply(`Trabajo abierto en ${site.name}.\nCarpeta: ${jobDir}\nMándame los issues y termina con /plan.`);
+  return openJob(name);
 });
 
-bot.command('plan', (ctx) => requestPlan(ctx));
+bot.command('plan', () => batch.flush());
 
 bot.command('estado', (ctx) => {
   const j = store.job;
-  if (!j) return ctx.reply('No hay trabajo abierto.');
-  return ctx.reply(`Sitio: ${j.site}\nFase: ${PHASE_LABEL[j.phase]}${busy ? ' (Claude trabajando)' : ''}\nPendientes: ${j.pending.length}\nContexto: ${j.contextTokens} tokens\nCarpeta: ${j.jobDir}`);
+  const next = store.nextBatch.length ? `\nLote siguiente: ${store.nextBatch.length} elementos` : '';
+  if (!j) return ctx.reply(`No hay trabajo abierto.${next}`);
+  return ctx.reply(`Sitio: ${j.site}\nFase: ${PHASE_LABEL[j.phase]}${busy ? ' (Claude trabajando)' : ''}\nRonda: ${j.round ?? 1}\nPendientes: ${j.pending.length}${next}\nContexto: ${j.contextTokens} tokens\nCarpeta: ${j.jobDir}`);
 });
 
 bot.command('cancelar', (ctx) => {
@@ -123,8 +115,9 @@ bot.command('cerrar', async (ctx) => {
   if (!store.job) return ctx.reply('No hay trabajo abierto.');
   if (busy) return ctx.reply('Claude está trabajando. Usa /cancelar primero.');
   const site = store.job.site;
-  store.close();
-  return ctx.reply(`Trabajo en ${site} cerrado.`);
+  closeJob();
+  await ctx.reply(`Trabajo en ${site} cerrado.`);
+  return processNextBatch();
 });
 
 // --- Contenido --------------------------------------------------------------
@@ -140,63 +133,138 @@ async function downloadFile(fileId, fallbackExt) {
   return dest;
 }
 
-async function receive(ctx, items) {
-  if (!store.job) {
-    orphans.push(...items);
-    return ctx.reply('¿De qué sitio es? Usa /nuevo <sitio> y lo añado al trabajo.');
+// Las capturas viajan como fileId hasta que hay trabajo; se descargan al entrar en él.
+async function addToJob(items) {
+  for (const it of items) {
+    if (it.type !== 'image' || it.path) {
+      store.addPending(it);
+      continue;
+    }
+    try {
+      store.addPending({ ...it, path: await downloadFile(it.fileId, it.ext) });
+    } catch (e) {
+      await say(`No pude descargar una captura: ${redact(e.message)}`);
+    }
   }
-  for (const item of items) store.addPending(item);
-  if (store.job.phase === 'collecting') return;
+}
+
+// Abre el trabajo y adopta el lote guardado. Hasta store.open no hay ningún await: los updates
+// de un álbum se atienden en paralelo y los siguientes tienen que ver el trabajo ya abierto.
+async function openJob(name, reason = '') {
+  const site = resolveSite(name, cfg.sitesRoot);
+  if (!site.ok) return say(notFoundText(name, site));
+  const jobDir = makeJobDir(cfg.auditsRoot, site.name);
+  store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
+  await addToJob(store.takeNextBatch());
+
+  const opened = `Trabajo abierto en ${site.name}${reason ? ` (${reason})` : ''}.`;
+  let dirty = '';
+  try { dirty = execFileSync('git', ['-C', site.path, 'status', '--short'], { encoding: 'utf8' }).trim(); } catch { dirty = ''; }
+  if (dirty) {
+    const sid = store.job.sessionId.slice(0, 8);
+    const kb = new InlineKeyboard().text('Seguir', `dirty:go:${sid}`).text('Cancelar', `dirty:cancel:${sid}`);
+    return say(`${opened}\nEl repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
+  }
+  const count = store.job.pending.length;
+  if (count) batch.touch();
+  const next = count
+    ? `Llevo ${count} elementos. Sigue reenviando; cierro el lote con /plan o tras ${idleText()} sin mensajes.`
+    : 'Mándame los issues y termina con /plan.';
+  return say(`${opened}\nCarpeta: ${jobDir}\n${next}`);
+}
+
+function closeJob() {
+  batch.cancel();
+  store.close();
+}
+
+async function receive(ctx, items, { forwarded }) {
+  const tagged = items.map((it) => ({ ...it, forwarded }));
+  const job = store.job;
+  if (!job) {
+    // Lote sin sitio: se guarda hasta /nuevo; al cerrarse el lote se pregunta el sitio.
+    for (const it of tagged) store.addToNextBatch(it);
+    batch.touch();
+    return;
+  }
+  if (forwarded && job.phase === 'reported' && !busy) {
+    // Reenvío tras el informe: lote nuevo de QA.
+    for (const it of tagged) store.addToNextBatch(it);
+    return processNextBatch();
+  }
+  if (forwarded && (busy || job.phase === 'plan' || job.phase === 'implement')) {
+    for (const it of tagged) store.addToNextBatch(it);
+    return ctx.reply('Guardado para el siguiente lote.');
+  }
+  await addToJob(tagged);
+  if (!store.job || !store.job.pending.length) return;
+  if (store.job.phase === 'collecting') {
+    batch.touch();
+    return;
+  }
   if (busy) return ctx.reply('Anotado. Entra en el siguiente turno.');
   if (store.job.phase === 'reported') store.startPlan();
   return runTurn();
 }
 
-bot.on('message:text', async (ctx) => {
-  const text = ctx.message.text;
-  if (text.startsWith('/')) return ctx.reply('Comando desconocido. Usa /start para ver la lista.');
-  if (store.job?.phase === 'collecting' && /^eso es todo\.?$/i.test(text.trim())) return requestPlan(ctx);
-  return receive(ctx, [{ type: 'text', text }]);
-});
-
-bot.on('message:photo', async (ctx) => {
-  if (!store.job) return ctx.reply('Primero /nuevo <sitio>; luego reenvía la captura.');
-  const photo = ctx.message.photo.at(-1);
-  let dest;
-  try {
-    dest = await downloadFile(photo.file_id, 'jpg');
-  } catch (e) {
-    return ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+// Lote guardado sin turno en curso: tras el informe cierra el trabajo y empieza otro.
+async function processNextBatch() {
+  if (busy || !store.nextBatch.length) return;
+  if (store.job) {
+    if (store.job.phase !== 'reported') return;
+    const site = store.job.site;
+    closeJob();
+    await say(`Nuevo lote de QA. Cierro el trabajo en ${site}.`);
   }
-  const items = [{ type: 'image', path: dest }];
-  if (ctx.message.caption) items.push({ type: 'text', text: ctx.message.caption });
-  return receive(ctx, items);
-});
+  batch.touch();
+}
 
-bot.on('message:document', async (ctx) => {
-  const doc = ctx.message.document;
-  if (!doc.mime_type?.startsWith('image/')) return ctx.reply('Solo acepto imágenes como archivo.');
-  if (!store.job) return ctx.reply('Primero /nuevo <sitio>; luego reenvía la captura.');
-  let dest;
-  try {
-    dest = await downloadFile(doc.file_id, doc.mime_type.split('/')[1].split('+')[0]);
-  } catch (e) {
-    return ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+async function handleContent(ctx) {
+  const msg = ctx.message;
+  const forwarded = isForwarded(msg);
+  let items;
+  if (typeof msg.text === 'string') {
+    const text = msg.text;
+    if (!forwarded) {
+      if (text.startsWith('/')) return ctx.reply('Comando desconocido. Usa /start para ver la lista.');
+      const batchOpen = store.job ? store.job.phase === 'collecting' : store.nextBatch.length > 0;
+      if (batchOpen && /^eso es todo\.?$/i.test(text.trim())) return batch.flush();
+    }
+    items = [{ type: 'text', text }];
+  } else if (msg.photo) {
+    items = [{ type: 'image', fileId: msg.photo.at(-1).file_id, ext: 'jpg' }];
+  } else if (msg.document) {
+    const mime = msg.document.mime_type ?? '';
+    if (!mime.startsWith('image/')) return ctx.reply('Solo acepto imágenes como archivo.');
+    items = [{ type: 'image', fileId: msg.document.file_id, ext: mime.split('/')[1].split('+')[0] }];
+  } else {
+    return;
   }
-  const items = [{ type: 'image', path: dest }];
-  if (ctx.message.caption) items.push({ type: 'text', text: ctx.message.caption });
-  return receive(ctx, items);
-});
+  if (msg.caption) items.push({ type: 'text', text: msg.caption });
+  return receive(ctx, items, { forwarded });
+}
 
-async function requestPlan(ctx) {
+bot.on(['message:text', 'message:photo', 'message:document'], handleContent);
+
+// Cierre del lote: por el temporizador, /plan o «eso es todo».
+async function closeBatch() {
+  try {
+    if (!store.job && store.nextBatch.length) return await say('¿De qué sitio es? Usa /nuevo <sitio>.');
+    return await requestPlan();
+  } catch (e) {
+    console.error('Error cerrando el lote:', redact(e?.stack ?? e));
+  }
+}
+
+async function requestPlan() {
   try {
     store.startPlan();
   } catch (e) {
     if (!(e instanceof StateError)) throw e;
     const msg = { 'no-job': 'No hay trabajo abierto. Usa /nuevo <sitio>.', empty: 'Aún no me has mandado ningún issue.', 'bad-phase': 'El plan ya está en marcha.' };
-    return ctx.reply(msg[e.code] ?? e.message);
+    return say(msg[e.code] ?? e.message);
   }
-  if (busy) return ctx.reply('Anotado. Entra en el siguiente turno.');
+  if (busy) return say('Anotado. Entra en el siguiente turno.');
   return runTurn();
 }
 
@@ -206,14 +274,15 @@ bot.callbackQuery(/^dirty:go:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
   await ctx.editMessageReplyMarkup().catch(() => {});
-  return say('Sigo. Mándame los issues y termina con /plan.');
+  if (store.job.phase === 'collecting' && store.job.pending.length) batch.touch();
+  return say(`Sigo. Mándame los issues y termina con /plan (o espera ${idleText()} sin mensajes).`);
 });
 
 bot.callbackQuery(/^dirty:cancel:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (store.job && !busy) store.close();
+  if (store.job && !busy) closeJob();
   return say('Trabajo cancelado.');
 });
 
@@ -330,6 +399,7 @@ async function runTurn() {
     if (store.job.phase === 'reported') store.startPlan();
     return runTurn();
   }
+  return processNextBatch();
 }
 
 async function deliverReport(turnStart) {
@@ -376,6 +446,11 @@ if (cfg.ownerId && store.job) {
   const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
   await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
 }
+if (cfg.ownerId && store.nextBatch.length) {
+  await say(`Tengo ${store.nextBatch.length} elementos guardados para el siguiente lote.`).catch(() => {});
+}
+if (!store.job && store.nextBatch.length) batch.touch();
+if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
 
 await bot.init();
 run(bot);

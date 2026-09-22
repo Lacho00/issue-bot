@@ -51,3 +51,21 @@ test('loadConfig: CHAT_ID numérico (puede ser negativo, grupo)', () => {
   writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nOWNER_ID=123\nCHAT_ID=-100987654321\n');
   assert.equal(loadConfig(envPath).chatId, -100987654321);
 });
+
+test('loadConfig: BATCH_IDLE_MS por defecto 120000; vacío o inválido cae al defecto', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\n');
+  assert.equal(loadConfig(envPath).batchIdleMs, 120_000);
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nBATCH_IDLE_MS=\n');
+  assert.equal(loadConfig(envPath).batchIdleMs, 120_000);
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nBATCH_IDLE_MS=abc\n');
+  assert.equal(loadConfig(envPath).batchIdleMs, 120_000);
+});
+
+test('loadConfig: BATCH_IDLE_MS numérico', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nBATCH_IDLE_MS=5000\n');
+  assert.equal(loadConfig(envPath).batchIdleMs, 5000);
+});

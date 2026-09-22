@@ -20,6 +20,11 @@ export function setEnvValue(text, key, value) {
   return `${base}${key}=${value}\n`;
 }
 
+const positiveInt = (v, fallback) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+};
+
 export function loadConfig(envPath = path.join(ROOT, '.env')) {
   const env = existsSync(envPath) ? parseEnv(readFileSync(envPath, 'utf8')) : {};
   return {
@@ -35,5 +40,6 @@ export function loadConfig(envPath = path.join(ROOT, '.env')) {
     turnTimeoutMs: 45 * 60 * 1000,
     permissionTimeoutMs: 30 * 60 * 1000,
     contextWarnTokens: 200_000,
+    batchIdleMs: positiveInt(env.BATCH_IDLE_MS, 120_000),
   };
 }
