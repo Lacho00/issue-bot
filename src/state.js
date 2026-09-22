@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 
+const tag = (item) => ({ ...item, forwarded: item.forwarded === true });
+
 export class StateError extends Error {
   constructor(code, message = code) {
     super(message);
@@ -11,16 +13,19 @@ export class Store {
   constructor(file) {
     this.file = file;
     this.job = null;
+    this.nextBatch = [];
   }
 
   load() {
-    this.job = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')).job ?? null : null;
+    const data = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : {};
+    this.job = data.job ?? null;
+    this.nextBatch = Array.isArray(data.nextBatch) ? data.nextBatch : [];
     return this.job;
   }
 
   save() {
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ job: this.job }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ job: this.job, nextBatch: this.nextBatch }, null, 2));
     renameSync(tmp, this.file);
   }
 
@@ -31,14 +36,26 @@ export class Store {
 
   open({ site, sitePath, jobDir, sessionId }) {
     if (this.job) throw new StateError('job-open');
-    this.job = { site, sitePath, jobDir, sessionId, phase: 'collecting', started: false, pending: [], imageCount: 0, contextTokens: 0 };
+    this.job = { site, sitePath, jobDir, sessionId, phase: 'collecting', round: 1, started: false, pending: [], imageCount: 0, contextTokens: 0 };
     this.save();
   }
 
   addPending(item) {
     this.#require();
-    this.job.pending.push(item);
+    this.job.pending.push(tag(item));
     this.save();
+  }
+
+  addToNextBatch(item) {
+    this.nextBatch.push(tag(item));
+    this.save();
+  }
+
+  takeNextBatch() {
+    const items = this.nextBatch;
+    this.nextBatch = [];
+    this.save();
+    return items;
   }
 
   takePending() {
@@ -52,6 +69,7 @@ export class Store {
   startPlan() {
     this.#require('collecting', 'reported');
     if (this.job.pending.length === 0) throw new StateError('empty');
+    if (this.job.phase === 'reported') this.job.round = (this.job.round ?? 1) + 1;
     this.job.phase = 'plan';
     this.save();
   }

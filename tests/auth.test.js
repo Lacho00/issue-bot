@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authorizeMessage, authorizeCallback } from '../src/auth.js';
+import { authorizeMessage, authorizeCallback, isForwarded } from '../src/auth.js';
 
 const msg = (over = {}) => ({ from: { id: 7 }, chat: { type: 'private', id: 7 }, text: 'hola', ...over });
 
@@ -12,8 +12,32 @@ test('otro remitente: ignore', () => {
   assert.equal(authorizeMessage(msg({ from: { id: 8 } }), 7, null), 'ignore');
 });
 
-test('mensaje reenviado del dueño: ignore', () => {
-  assert.equal(authorizeMessage(msg({ forward_origin: { type: 'user' } }), 7, null), 'ignore');
+test('reenvío del dueño en su chat privado: allow', () => {
+  assert.equal(authorizeMessage(msg({ forward_origin: { type: 'user' } }), 7, null), 'allow');
+});
+
+test('reenvío del dueño en el grupo registrado: allow (el autor original no importa)', () => {
+  assert.equal(authorizeMessage(msg({ chat: { type: 'supergroup', id: -100 }, forward_origin: { type: 'hidden_user', sender_user_name: 'QA' } }), 7, -100), 'allow');
+  assert.equal(authorizeMessage(msg({ chat: { type: 'group', id: -100 }, forward_date: 1758500000 }), 7, -100), 'allow');
+});
+
+test('reenvío de otro miembro del grupo: ignore', () => {
+  assert.equal(authorizeMessage(msg({ from: { id: 8 }, chat: { type: 'group', id: -100 }, forward_origin: { type: 'user' } }), 7, -100), 'ignore');
+});
+
+test('reenvío del dueño en otro chat: ignore', () => {
+  assert.equal(authorizeMessage(msg({ chat: { type: 'group', id: -200 }, forward_origin: { type: 'user' } }), 7, -100), 'ignore');
+});
+
+test('reenvío sin OWNER_ID: ignore (un reenvío no registra)', () => {
+  assert.equal(authorizeMessage(msg({ forward_origin: { type: 'user' } }), null, null), 'ignore');
+});
+
+test('isForwarded: forward_origin o forward_date', () => {
+  assert.equal(isForwarded(msg({ forward_origin: { type: 'user' } })), true);
+  assert.equal(isForwarded(msg({ forward_date: 1758500000 })), true);
+  assert.equal(isForwarded(msg()), false);
+  assert.equal(isForwarded(undefined), false);
 });
 
 test('sin registro de grupo: el dueño en un grupo se ignora (el chat permitido es el privado)', () => {

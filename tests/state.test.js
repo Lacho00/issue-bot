@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Store, StateError } from '../src/state.js';
@@ -12,10 +12,12 @@ test('recorrido completo', () => {
   const st = new Store(file());
   st.open(base);
   assert.equal(st.job.phase, 'collecting');
+  assert.equal(st.job.round, 1);
   st.addPending({ type: 'text', text: 'issue 1' });
   st.startPlan();
   assert.equal(st.job.phase, 'plan');
-  assert.deepEqual(st.takePending(), [{ type: 'text', text: 'issue 1' }]);
+  assert.equal(st.job.round, 1);
+  assert.deepEqual(st.takePending(), [{ type: 'text', text: 'issue 1', forwarded: false }]);
   assert.deepEqual(st.job.pending, []);
   st.approve();
   assert.equal(st.job.phase, 'implement');
@@ -24,6 +26,7 @@ test('recorrido completo', () => {
   st.addPending({ type: 'text', text: 'corrige esto' });
   st.startPlan();
   assert.equal(st.job.phase, 'plan');
+  assert.equal(st.job.round, 2);
   st.close();
   assert.equal(st.job, null);
 });
@@ -56,4 +59,61 @@ test('nombres de captura correlativos', () => {
   st.open(base);
   assert.equal(st.nextImageName('jpg'), 'qa-01.jpg');
   assert.equal(st.nextImageName('png'), 'qa-02.png');
+});
+
+test('addPending guarda forwarded como booleano', () => {
+  const st = new Store(file());
+  st.open(base);
+  st.addPending({ type: 'text', text: 'de la QA', forwarded: true });
+  st.addPending({ type: 'text', text: 'mío' });
+  st.addPending({ type: 'image', path: '/tmp/j/img/qa-01.jpg', forwarded: 'sí' });
+  assert.deepEqual(st.job.pending.map((i) => i.forwarded), [true, false, false]);
+});
+
+test('round: empieza en 1 y sube solo en correcciones tras reported', () => {
+  const st = new Store(file());
+  st.open(base);
+  st.addPending({ type: 'text', text: 'a' });
+  st.startPlan();
+  st.approve();
+  st.finishImplement();
+  assert.equal(st.job.round, 1);
+  for (const expected of [2, 3]) {
+    st.addPending({ type: 'text', text: 'corrige' });
+    st.startPlan();
+    assert.equal(st.job.round, expected);
+    st.approve();
+    st.finishImplement();
+  }
+});
+
+test('nextBatch: vive fuera del trabajo, se persiste y sobrevive a close', () => {
+  const f = file();
+  const a = new Store(f);
+  a.addToNextBatch({ type: 'text', text: 'sin trabajo', forwarded: true });
+  a.open(base);
+  a.addToNextBatch({ type: 'image', fileId: 'F1', ext: 'jpg' });
+  a.close();
+  const b = new Store(f);
+  b.load();
+  assert.equal(b.job, null);
+  assert.deepEqual(b.nextBatch, [
+    { type: 'text', text: 'sin trabajo', forwarded: true },
+    { type: 'image', fileId: 'F1', ext: 'jpg', forwarded: false },
+  ]);
+  assert.equal(b.takeNextBatch().length, 2);
+  const c = new Store(f);
+  c.load();
+  assert.deepEqual(c.nextBatch, []);
+});
+
+test('state.json anterior sin round ni nextBatch se carga', () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ job: { ...base, phase: 'reported', started: true, pending: [], imageCount: 0, contextTokens: 0 } }));
+  const st = new Store(f);
+  st.load();
+  assert.deepEqual(st.nextBatch, []);
+  st.addPending({ type: 'text', text: 'corrección' });
+  st.startPlan();
+  assert.equal(st.job.round, 2);
 });
