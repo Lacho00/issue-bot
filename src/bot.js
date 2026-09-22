@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, createWriteStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -88,7 +88,8 @@ bot.command('nuevo', async (ctx) => {
   let dirty = '';
   try { dirty = execFileSync('git', ['-C', site.path, 'status', '--short'], { encoding: 'utf8' }).trim(); } catch { dirty = ''; }
   if (dirty) {
-    const kb = new InlineKeyboard().text('Seguir', 'dirty:go').text('Cancelar', 'dirty:cancel');
+    const sid = store.job.sessionId.slice(0, 8);
+    const kb = new InlineKeyboard().text('Seguir', `dirty:go:${sid}`).text('Cancelar', `dirty:cancel:${sid}`);
     return say(`Trabajo abierto en ${site.name}, pero el repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
   }
   return ctx.reply(`Trabajo abierto en ${site.name}.\nCarpeta: ${jobDir}\nMándame los issues y termina con /plan.`);
@@ -129,12 +130,12 @@ async function downloadFile(fileId, fallbackExt) {
   return dest;
 }
 
-async function receive(ctx, item) {
+async function receive(ctx, items) {
   if (!store.job) {
-    orphans.push(item);
+    orphans.push(...items);
     return ctx.reply('¿De qué sitio es? Usa /nuevo <sitio> y lo añado al trabajo.');
   }
-  store.addPending(item);
+  for (const item of items) store.addPending(item);
   if (store.job.phase === 'collecting') return;
   if (busy) return ctx.reply('Anotado. Entra en el siguiente turno.');
   if (store.job.phase === 'reported') store.startPlan();
@@ -145,34 +146,36 @@ bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
   if (text.startsWith('/')) return ctx.reply('Comando desconocido. Usa /start para ver la lista.');
   if (store.job?.phase === 'collecting' && /^eso es todo\.?$/i.test(text.trim())) return requestPlan(ctx);
-  return receive(ctx, { type: 'text', text });
+  return receive(ctx, [{ type: 'text', text }]);
 });
 
 bot.on('message:photo', async (ctx) => {
-  if (!store.job) return receive(ctx, { type: 'text', text: '(captura enviada antes de /nuevo: reenvíala)' });
+  if (!store.job) return ctx.reply('Primero /nuevo <sitio>; luego reenvía la captura.');
   const photo = ctx.message.photo.at(-1);
   let dest;
   try {
     dest = await downloadFile(photo.file_id, 'jpg');
   } catch (e) {
-    await ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+    return ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
   }
-  if (dest) await receive(ctx, { type: 'image', path: dest });
-  if (ctx.message.caption) await receive(ctx, { type: 'text', text: ctx.message.caption });
+  const items = [{ type: 'image', path: dest }];
+  if (ctx.message.caption) items.push({ type: 'text', text: ctx.message.caption });
+  return receive(ctx, items);
 });
 
 bot.on('message:document', async (ctx) => {
   const doc = ctx.message.document;
   if (!doc.mime_type?.startsWith('image/')) return ctx.reply('Solo acepto imágenes como archivo.');
-  if (!store.job) return receive(ctx, { type: 'text', text: '(captura enviada antes de /nuevo: reenvíala)' });
+  if (!store.job) return ctx.reply('Primero /nuevo <sitio>; luego reenvía la captura.');
   let dest;
   try {
-    dest = await downloadFile(doc.file_id, doc.mime_type.split('/')[1]);
+    dest = await downloadFile(doc.file_id, doc.mime_type.split('/')[1].split('+')[0]);
   } catch (e) {
-    await ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
+    return ctx.reply(`No pude descargar la captura: ${redact(e.message)}`);
   }
-  if (dest) await receive(ctx, { type: 'image', path: dest });
-  if (ctx.message.caption) await receive(ctx, { type: 'text', text: ctx.message.caption });
+  const items = [{ type: 'image', path: dest }];
+  if (ctx.message.caption) items.push({ type: 'text', text: ctx.message.caption });
+  return receive(ctx, items);
 });
 
 async function requestPlan(ctx) {
@@ -189,14 +192,16 @@ async function requestPlan(ctx) {
 
 // --- Botones ----------------------------------------------------------------
 
-bot.callbackQuery('dirty:go', async (ctx) => {
+bot.callbackQuery(/^dirty:go:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
+  if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
   await ctx.editMessageReplyMarkup().catch(() => {});
   return say('Sigo. Mándame los issues y termina con /plan.');
 });
 
-bot.callbackQuery('dirty:cancel', async (ctx) => {
+bot.callbackQuery(/^dirty:cancel:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
+  if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
   await ctx.editMessageReplyMarkup().catch(() => {});
   if (store.job && !busy) store.close();
   return say('Trabajo cancelado.');
@@ -251,8 +256,9 @@ async function runTurn() {
   busy = true;
   try {
     const phase = job.phase === 'implement' ? 'implement' : 'plan';
-    const items = store.takePending();
     const status = await say(phase === 'plan' ? 'Analizando…' : 'Implementando…');
+    const items = store.takePending();
+    const turnStart = new Date();
     let lastEdit = 0;
 
     const args = buildArgs({
@@ -286,21 +292,25 @@ async function runTurn() {
     if (r.contextTokens) store.setContextTokens(r.contextTokens);
     await bot.api.deleteMessage(cfg.ownerId, status.message_id).catch(() => {});
 
-    if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
-    else if (r.killed) await say('Turno cancelado. Escribe «sigue» para retomarlo.');
-    else if (r.isError) {
-      const limit = /limit/i.test(r.text) ? 'Límite de uso alcanzado. ' : '';
-      await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
-    } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
-    else if (phase === 'plan') {
-      await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', 'approve') });
-    } else {
-      await say(r.text || 'Implementación terminada.');
-      await deliverReport();
-    }
+    try {
+      if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
+      else if (r.killed) await say('Turno cancelado. Escribe «sigue» para retomarlo.');
+      else if (r.isError) {
+        const limit = /limit/i.test(r.text) ? 'Límite de uso alcanzado. ' : '';
+        await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
+      } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
+      else if (phase === 'plan') {
+        await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', 'approve') });
+      } else {
+        await say(r.text || 'Implementación terminada.');
+        await deliverReport(turnStart);
+      }
 
-    if (store.job && store.job.contextTokens > cfg.contextWarnTokens) {
-      await say(`El contexto va por ${store.job.contextTokens} tokens. Conviene /cerrar y abrir otro trabajo.`);
+      if (store.job && store.job.contextTokens > cfg.contextWarnTokens) {
+        await say(`El contexto va por ${store.job.contextTokens} tokens. Conviene /cerrar y abrir otro trabajo.`);
+      }
+    } catch (e) {
+      await say(`Error entregando el resultado: ${redact(e.message)}. Escribe «sigue» para reintentar.`).catch(() => {});
     }
   } finally {
     busy = false;
@@ -312,18 +322,19 @@ async function runTurn() {
   }
 }
 
-async function deliverReport() {
+async function deliverReport(turnStart) {
   const job = store.job;
   const htmlPath = path.join(job.jobDir, 'informe.html');
-  if (!existsSync(htmlPath)) {
+  const fresh = existsSync(htmlPath) && (!turnStart || statSync(htmlPath).mtime >= turnStart);
+  if (!fresh) {
     return say(`Claude terminó sin escribir ${htmlPath}. Escribe «sigue» para pedírselo.`);
   }
-  store.finishImplement();
   const html = inlineImages(readFileSync(htmlPath, 'utf8'), job.jobDir);
   const missing = unembeddedRefs(html);
   const mdPath = path.join(job.jobDir, 'informe.md');
   const summary = existsSync(mdPath) ? summaryFromMarkdown(readFileSync(mdPath, 'utf8')) : '';
   await bot.api.sendDocument(cfg.ownerId, new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
+  store.finishImplement();
   if (summary) await say(summary);
   if (missing.length) await say(`Imágenes que no encontré: ${missing.join(', ')}`);
   return say('Revisa el diff en el repo. Si hay correcciones, escríbelas; si no, /cerrar.');
@@ -335,8 +346,16 @@ bot.catch((err) => console.error('Error del bot:', redact(err.error?.stack ?? er
 
 await startBridge(cfg.socketPath, onPermission);
 
+const RESTART_HINT = {
+  collecting: 'Sigue mandando issues y termina con /plan. O /cerrar.',
+  plan: 'Escribe «sigue» para continuar. O /cerrar.',
+  implement: 'Escribe «sigue» para continuar. O /cerrar.',
+  reported: 'Escribe correcciones o /cerrar.',
+};
+
 if (cfg.ownerId && store.job) {
-  await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. Escribe «sigue» para continuar o /cerrar.`).catch(() => {});
+  const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
+  await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
 }
 
 run(bot);
