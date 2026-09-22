@@ -28,11 +28,12 @@ En cada cambio visual mide antes y después con getComputedStyle y getBoundingCl
 escritorio y móvil, en todos los elementos que compartan la clase. Si no coincide con lo esperado,
 para y pregunta.
 Haz capturas del «Después» en ${jobDir}/img/ con nombres NN-descripcion.png.
-Al terminar escribe ${jobDir}/informe.md e ${jobDir}/informe.html:
+Al terminar escribe ${jobDir}/informe.md en español:
 - Título «QA <fecha>: correcciones», párrafo de contexto (dónde y cómo se probó, estado de git).
 - Tabla resumen: #, Issue, Estado (Corregido / Mitigado / No es de código / Pendiente).
 - Por issue: Antes (captura qa-NN), Causa, Arreglo, Después (captura nueva).
-- En el HTML, imágenes con rutas relativas img/..., CSS inline, legible en móvil.
+- Las imágenes van como imágenes Markdown con rutas relativas img/..., por ejemplo ![Antes](img/qa-01.jpg).
+  El bot convierte el Markdown a HTML automáticamente.
 Termina tu respuesta con un resumen de 3 a 6 líneas.`;
 
 export function systemPrompt({ phase, ...ctx }) {

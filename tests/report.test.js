@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { inlineImages, unembeddedRefs, summaryFromMarkdown } from '../src/report.js';
+import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from '../src/report.js';
 
 test('embebe imágenes locales y deja las externas', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'rep-'));
@@ -46,4 +46,31 @@ test('URI malformada 50%off.png no lanza y queda sin embeber', () => {
   const out = inlineImages(html, dir);
   assert.doesNotThrow(() => { unembeddedRefs(out); });
   assert.deepEqual(unembeddedRefs(out), ['50%off.png']);
+});
+
+test('renderReport genera una tabla a partir de una tabla Markdown', () => {
+  const md = '| # | Issue |\n|---|---|\n| 1 | Flechas |\n';
+  const out = renderReport(md, { title: 'QA sitio 2026-09-21' });
+  assert.match(out, /<table>/);
+});
+
+test('renderReport convierte una imagen Markdown en <img src="...">', () => {
+  const md = '![Antes](img/a.png)';
+  const out = renderReport(md, { title: 'QA' });
+  assert.match(out, /<img src="img\/a\.png"/);
+});
+
+test('renderReport incluye el meta viewport', () => {
+  const out = renderReport('texto', { title: 'QA' });
+  assert.match(out, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
+});
+
+test('renderReport + inlineImages embebe una imagen existente', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rep-'));
+  mkdirSync(path.join(dir, 'img'));
+  writeFileSync(path.join(dir, 'img', 'a.png'), Buffer.from([1, 2, 3]));
+  const md = '![Antes](img/a.png)';
+  const html = renderReport(md, { title: 'QA' });
+  const out = inlineImages(html, dir);
+  assert.match(out, /src="data:image\/png;base64,AQID"/);
 });

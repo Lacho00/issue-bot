@@ -20,9 +20,14 @@ test('ambas fases piden leer el CLAUDE.md del sitio (no se carga solo)', () => {
 test('implement: solo lo aprobado, informe en la carpeta del trabajo', () => {
   const p = systemPrompt({ ...ctx, phase: 'implement' });
   assert.match(p, /solo lo aprobado/i);
-  assert.match(p, /informe\.html/);
+  assert.match(p, /informe\.md/);
   assert.match(p, /qa-2026-09-21/);
   assert.match(p, /sin commitear/i);
+});
+
+test('implement: pide el informe en español', () => {
+  const p = systemPrompt({ ...ctx, phase: 'implement' });
+  assert.match(p, /informe\.md en español/i);
 });
 
 test('userMessage junta textos y rutas de capturas', () => {

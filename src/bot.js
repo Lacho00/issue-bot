@@ -16,7 +16,7 @@ import { buildSettings, decidePermission, describeRequest } from './policy.js';
 import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
-import { inlineImages, unembeddedRefs, summaryFromMarkdown } from './report.js';
+import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from './report.js';
 
 const cfg = loadConfig();
 if (!cfg.token) {
@@ -335,13 +335,22 @@ async function runTurn() {
 async function deliverReport(turnStart) {
   const job = store.job;
   const htmlPath = path.join(job.jobDir, 'informe.html');
-  const fresh = existsSync(htmlPath) && (!turnStart || statSync(htmlPath).mtime >= turnStart);
-  if (!fresh) {
-    return say(`Claude terminó sin escribir ${htmlPath}. Escribe «sigue» para pedírselo.`);
-  }
-  const html = inlineImages(readFileSync(htmlPath, 'utf8'), job.jobDir);
-  const missing = unembeddedRefs(html);
   const mdPath = path.join(job.jobDir, 'informe.md');
+  const isFresh = (p) => existsSync(p) && (!turnStart || statSync(p).mtime >= turnStart);
+
+  let htmlSource;
+  if (isFresh(htmlPath)) {
+    htmlSource = readFileSync(htmlPath, 'utf8');
+  } else if (isFresh(mdPath)) {
+    const md = readFileSync(mdPath, 'utf8');
+    htmlSource = renderReport(md, { title: `QA ${job.site} ${localDate()}` });
+    writeFileSync(htmlPath, htmlSource);
+  } else {
+    return say(`Claude terminó sin escribir ${mdPath}. Escribe «sigue» para pedírselo.`);
+  }
+
+  const html = inlineImages(htmlSource, job.jobDir);
+  const missing = unembeddedRefs(html);
   const summary = existsSync(mdPath) ? summaryFromMarkdown(readFileSync(mdPath, 'utf8')) : '';
   await bot.api.sendDocument(chat(), new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
   store.finishImplement();
