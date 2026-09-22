@@ -30,8 +30,45 @@ export function startTurn({ bin, cwd, args, prompt, timeoutMs, env = {}, onEvent
   let sessionSeen = false;
   let stderr = '';
   let buf = '';
+  let settled = false;
 
-  const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
+  let timer = null;
+  let killTimer = null;
+
+  const setKillTimer = () => {
+    killTimer = setTimeout(() => {
+      if (!settled) child.kill('SIGKILL');
+    }, 5000);
+  };
+
+  const startTimeout = () => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      setKillTimer();
+    }, timeoutMs);
+  };
+
+  startTimeout();
+
+  const settle = (exitCode) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (killTimer) clearTimeout(killTimer);
+    const u = result?.usage ?? {};
+    return {
+      ok: !!result && !result.is_error && !timedOut && !killed,
+      text: result?.result ?? '',
+      isError: !!result?.is_error,
+      timedOut,
+      killed,
+      sessionSeen,
+      contextTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+      exitCode,
+      stderr: stderr.slice(-2000),
+    };
+  };
 
   child.stdout.on('data', (d) => {
     buf += d;
@@ -48,25 +85,47 @@ export function startTurn({ bin, cwd, args, prompt, timeoutMs, env = {}, onEvent
     }
   });
   child.stderr.on('data', (d) => { stderr += d; });
+  child.stdin.on('error', () => {});
+  child.on('error', (err) => {
+    if (!settled) {
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    }
+  });
+
   child.stdin.end(prompt);
 
   const promise = new Promise((resolve) => {
     child.on('close', (exitCode) => {
-      clearTimeout(timer);
-      const u = result?.usage ?? {};
+      resolve(settle(exitCode));
+    });
+    child.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+      }
       resolve({
-        ok: !!result && !result.is_error && !timedOut && !killed,
-        text: result?.result ?? '',
-        isError: !!result?.is_error,
+        ok: false,
+        isError: true,
+        text: '',
         timedOut,
         killed,
         sessionSeen,
-        contextTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
-        exitCode,
-        stderr: stderr.slice(-2000),
+        contextTokens: 0,
+        exitCode: null,
+        stderr: String(err.message),
       });
     });
   });
 
-  return { promise, kill: () => { killed = true; child.kill('SIGTERM'); } };
+  return {
+    promise,
+    kill: () => {
+      killed = true;
+      child.kill('SIGTERM');
+      setKillTimer();
+    },
+  };
 }

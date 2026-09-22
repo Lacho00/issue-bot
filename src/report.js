@@ -6,9 +6,16 @@ const IMG = /(<img\b[^>]*?\bsrc=")([^"]+)(")/gi;
 const isInline = (src) => /^(data:|https?:)/i.test(src);
 
 export function inlineImages(html, baseDir) {
+  const root = path.resolve(baseDir);
   return html.replace(IMG, (m, before, src, after) => {
     if (isInline(src)) return m;
-    const file = path.resolve(baseDir, decodeURI(src));
+    let file;
+    try {
+      file = path.resolve(root, decodeURI(src));
+    } catch {
+      return m;
+    }
+    if (!file.startsWith(root + path.sep)) return m;
     const mime = MIME[path.extname(file).toLowerCase()];
     if (!mime || !existsSync(file)) return m;
     return `${before}data:${mime};base64,${readFileSync(file).toString('base64')}${after}`;

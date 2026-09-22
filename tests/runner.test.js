@@ -64,3 +64,16 @@ test('statusFromEvent describe herramientas', () => {
   assert.equal(statusFromEvent(e), 'Read functions.php');
   assert.equal(statusFromEvent({ type: 'system' }), null);
 });
+
+test('binario inexistente no tumba el proceso', async () => {
+  const r = await run('ok', { bin: '/nonexistent/claude-xyz' }).promise;
+  assert.equal(r.ok, false);
+  assert.equal(r.isError, true);
+  assert.match(r.stderr, /ENOENT/);
+});
+
+test('SIGKILL escalation mata procesos que ignoran SIGTERM', async () => {
+  const r = await run('stubborn', { timeoutMs: 200 }).promise;
+  assert.equal(r.timedOut, true);
+  assert.equal(r.ok, false);
+});

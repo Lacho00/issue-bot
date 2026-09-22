@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import net from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { startBridge, requestPermission } from '../src/permission-bridge.js';
@@ -49,4 +50,20 @@ test('MCP: allow devuelve updatedInput', async () => {
 test('MCP: sin bot escuchando deniega', async () => {
   const { payload } = await callMcp(sock(), { tool_name: 'Bash', input: { command: 'ls' } });
   assert.equal(payload.behavior, 'deny');
+});
+
+test('requestPermission rechaza si el servidor cierra sin responder', async () => {
+  const s = sock();
+  const server = net.createServer((sock) => sock.end());
+  await new Promise((resolve) => {
+    server.listen(s, resolve);
+  });
+  try {
+    await requestPermission(s, { tool_name: 'Bash', input: {} });
+    assert.fail('debería haber lanzado error');
+  } catch (e) {
+    assert.match(e.message, /bot cerró|closed/i);
+  } finally {
+    server.close();
+  }
 });

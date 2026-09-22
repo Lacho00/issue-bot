@@ -30,3 +30,20 @@ test('summaryFromMarkdown extrae la primera tabla', () => {
 test('summaryFromMarkdown sin tabla devuelve cadena vacía', () => {
   assert.equal(summaryFromMarkdown('# QA\n\nnada'), '');
 });
+
+test('path traversal: ../secreto.png afuera de baseDir queda sin embeber', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rep-'));
+  const parentDir = path.join(dir, '..');
+  writeFileSync(path.join(parentDir, 'secreto.png'), Buffer.from([1, 2, 3]));
+  const html = '<img src="../secreto.png">';
+  const out = inlineImages(html, dir);
+  assert.deepEqual(unembeddedRefs(out), ['../secreto.png']);
+});
+
+test('URI malformada 50%off.png no lanza y queda sin embeber', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rep-'));
+  const html = '<img src="50%off.png">';
+  const out = inlineImages(html, dir);
+  assert.doesNotThrow(() => { unembeddedRefs(out); });
+  assert.deepEqual(unembeddedRefs(out), ['50%off.png']);
+});

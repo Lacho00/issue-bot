@@ -34,14 +34,33 @@ export function requestPermission(socketPath, req) {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(socketPath);
     let buf = '';
-    sock.on('error', reject);
+    let settled = false;
+    sock.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
     sock.on('connect', () => sock.write(`${JSON.stringify(req)}\n`));
     sock.on('data', (d) => {
       buf += d;
       const i = buf.indexOf('\n');
       if (i >= 0) {
         sock.end();
-        resolve(JSON.parse(buf.slice(0, i)));
+        if (!settled) {
+          settled = true;
+          try {
+            resolve(JSON.parse(buf.slice(0, i)));
+          } catch (e) {
+            reject(e);
+          }
+        }
+      }
+    });
+    sock.on('close', () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('el bot cerró la conexión sin responder'));
       }
     });
   });
