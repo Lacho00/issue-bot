@@ -5,6 +5,9 @@ aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y
 
 ## Instalación
 
+Requiere `claude` instalado y con sesión iniciada (`claude login`) para el usuario
+que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
+
 1. `npm install`
 2. Crear `.env` (permisos 600):
 
@@ -14,10 +17,20 @@ aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y
    CHAT_ID=
    ```
 
+   Claves opcionales, con sus valores por defecto:
+
+   ```
+   SITES_ROOT=/srv/http
+   AUDITS_ROOT=/home/lacho/audits
+   CLAUDE_BIN=claude
+   BOT_SOCKET=<carpeta del bot>/bot.sock
+   ```
+
 3. Escribir al bot en privado. El primer mensaje registra tu user ID en `OWNER_ID`.
 4. Servicio:
 
    ```
+   mkdir -p ~/.config/systemd/user
    ln -sf /srv/http/issue-bot/systemd/issue-bot.service ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now issue-bot
