@@ -25,6 +25,7 @@ if (!cfg.token) {
 }
 
 const redact = (s) => String(s).split(cfg.token).join('<token>');
+const chat = () => cfg.chatId ?? cfg.ownerId;
 
 const bot = new Bot(cfg.token);
 const store = new Store(cfg.statePath);
@@ -41,7 +42,7 @@ async function say(text, extra = {}) {
   const parts = splitMessage(text);
   let last;
   for (let i = 0; i < parts.length; i++) {
-    last = await bot.api.sendMessage(cfg.ownerId, parts[i], i === parts.length - 1 ? extra : {});
+    last = await bot.api.sendMessage(chat(), parts[i], i === parts.length - 1 ? extra : {});
   }
   return last;
 }
@@ -50,19 +51,28 @@ async function say(text, extra = {}) {
 
 bot.use(async (ctx, next) => {
   if (ctx.callbackQuery) {
-    if (!authorizeCallback(ctx.callbackQuery.from, cfg.ownerId)) return;
+    if (!authorizeCallback(ctx.callbackQuery.from, cfg.ownerId, cfg.chatId, ctx.callbackQuery.message?.chat)) return;
     return next();
   }
   const msg = ctx.message;
   if (!msg) return;
-  const verdict = authorizeMessage(msg, cfg.ownerId);
+  if (msg.migrate_to_chat_id && msg.chat?.id === chat()) {
+    cfg.chatId = msg.migrate_to_chat_id;
+    const text = existsSync(cfg.envPath) ? readFileSync(cfg.envPath, 'utf8') : '';
+    writeFileSync(cfg.envPath, setEnvValue(text, 'CHAT_ID', String(cfg.chatId)), { mode: 0o600 });
+    console.log(`Grupo migrado a supergrupo. CHAT_ID actualizado: ${cfg.chatId}`);
+    return;
+  }
+  const verdict = authorizeMessage(msg, cfg.ownerId, cfg.chatId);
   if (verdict === 'ignore') return;
   if (verdict === 'register') {
     cfg.ownerId = msg.from.id;
+    cfg.chatId = msg.chat.id;
     const text = existsSync(cfg.envPath) ? readFileSync(cfg.envPath, 'utf8') : '';
-    writeFileSync(cfg.envPath, setEnvValue(text, 'OWNER_ID', String(cfg.ownerId)), { mode: 0o600 });
-    console.log(`OWNER_ID registrado: ${cfg.ownerId}`);
-    await ctx.reply(`Registrado como dueño (ID ${cfg.ownerId}). No aceptaré mensajes de nadie más.`);
+    const updated = setEnvValue(setEnvValue(text, 'OWNER_ID', String(cfg.ownerId)), 'CHAT_ID', String(cfg.chatId));
+    writeFileSync(cfg.envPath, updated, { mode: 0o600 });
+    console.log(`OWNER_ID registrado: ${cfg.ownerId}, CHAT_ID: ${cfg.chatId}`);
+    await ctx.reply(`Registrado: dueño ${cfg.ownerId}, chat ${cfg.chatId}. Solo atiendo al dueño en este chat.`);
     return;
   }
   return next();
@@ -239,7 +249,7 @@ async function onPermission({ tool_name, input }) {
     const timer = setTimeout(async () => {
       permissions.delete(id);
       resolve({ behavior: 'deny', message: 'Sin respuesta del dueño en 30 minutos.' });
-      await bot.api.editMessageText(cfg.ownerId, msg.message_id, `${text}\n→ Denegado por tiempo`).catch(() => {});
+      await bot.api.editMessageText(chat(), msg.message_id, `${text}\n→ Denegado por tiempo`).catch(() => {});
     }, cfg.permissionTimeoutMs);
     permissions.set(id, {
       text,
@@ -282,7 +292,7 @@ async function runTurn() {
         const s = statusFromEvent(e);
         if (!s || Date.now() - lastEdit < 4000) return;
         lastEdit = Date.now();
-        bot.api.editMessageText(cfg.ownerId, status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
+        bot.api.editMessageText(chat(), status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
       },
     });
     killCurrent = turn.kill;
@@ -290,7 +300,7 @@ async function runTurn() {
 
     if (r.sessionSeen && !job.started) store.markStarted();
     if (r.contextTokens) store.setContextTokens(r.contextTokens);
-    await bot.api.deleteMessage(cfg.ownerId, status.message_id).catch(() => {});
+    await bot.api.deleteMessage(chat(), status.message_id).catch(() => {});
 
     try {
       if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
@@ -333,7 +343,7 @@ async function deliverReport(turnStart) {
   const missing = unembeddedRefs(html);
   const mdPath = path.join(job.jobDir, 'informe.md');
   const summary = existsSync(mdPath) ? summaryFromMarkdown(readFileSync(mdPath, 'utf8')) : '';
-  await bot.api.sendDocument(cfg.ownerId, new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
+  await bot.api.sendDocument(chat(), new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
   store.finishImplement();
   if (summary) await say(summary);
   if (missing.length) await say(`Imágenes que no encontré: ${missing.join(', ')}`);
@@ -358,5 +368,6 @@ if (cfg.ownerId && store.job) {
   await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
 }
 
+await bot.init();
 run(bot);
 console.log('issue-bot escuchando');

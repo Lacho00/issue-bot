@@ -11,6 +11,7 @@ aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y
    ```
    TELEGRAM_TOKEN=<token de BotFather>
    OWNER_ID=
+   CHAT_ID=
    ```
 
 3. Escribir al bot en privado. El primer mensaje registra tu user ID en `OWNER_ID`.
@@ -33,3 +34,16 @@ aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y
 
 Diseño: `docs/superpowers/specs/2026-09-21-telegram-issue-bot-design.md`.
 Logs: `journalctl --user -u issue-bot -f`.
+
+## Grupo
+
+El bot también puede hablar en un grupo de Telegram en vez de en privado:
+
+1. Con BotFather, `/setprivacy` → **Disable** para este bot. Si no, en un grupo solo
+   recibe comandos (`/plan`, etc.), no textos sueltos ni capturas.
+2. Quita el bot del grupo y vuelve a añadirlo (para que el cambio de privacidad
+   surta efecto).
+3. El primer mensaje que el bot reciba en ese grupo registra a su remitente como
+   dueño (`OWNER_ID`) y ese chat como `CHAT_ID`. A partir de ahí solo atiende al
+   dueño y solo en ese chat (o en privado, si nunca se registró un grupo).
+4. El resto de personas del grupo pueden leer todo lo que el bot publique ahí.

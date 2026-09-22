@@ -26,6 +26,7 @@ export function loadConfig(envPath = path.join(ROOT, '.env')) {
     envPath,
     token: env.TELEGRAM_TOKEN || '',
     ownerId: env.OWNER_ID ? Number(env.OWNER_ID) : null,
+    chatId: env.CHAT_ID ? Number(env.CHAT_ID) : null,
     sitesRoot: env.SITES_ROOT || '/srv/http',
     auditsRoot: env.AUDITS_ROOT || '/home/lacho/audits',
     claudeBin: env.CLAUDE_BIN || 'claude',

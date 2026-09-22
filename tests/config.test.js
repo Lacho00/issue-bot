@@ -37,3 +37,17 @@ test('loadConfig: OWNER_ID numérico', () => {
   writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nOWNER_ID=123\n');
   assert.equal(loadConfig(envPath).ownerId, 123);
 });
+
+test('loadConfig: sin CHAT_ID es null', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nOWNER_ID=123\n');
+  assert.equal(loadConfig(envPath).chatId, null);
+});
+
+test('loadConfig: CHAT_ID numérico (puede ser negativo, grupo)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nOWNER_ID=123\nCHAT_ID=-100987654321\n');
+  assert.equal(loadConfig(envPath).chatId, -100987654321);
+});
