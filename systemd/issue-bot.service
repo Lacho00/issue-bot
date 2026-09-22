@@ -1,0 +1,14 @@
+[Unit]
+Description=Bot de Telegram para issues de sitios
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/srv/http/issue-bot
+ExecStart=/home/lacho/.config/nvm/versions/node/v24.18.0/bin/node src/bot.js
+Environment=PATH=/home/lacho/.local/bin:/home/lacho/.config/nvm/versions/node/v24.18.0/bin:/usr/local/bin:/usr/bin
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
