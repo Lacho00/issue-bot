@@ -142,8 +142,15 @@ async function addToJob(items) {
     }
     try {
       store.addPending({ ...it, path: await downloadFile(it.fileId, it.ext) });
+      continue;
+    } catch {
+      // Un fallo de red puntual no debe perder la captura: se reintenta una vez.
+    }
+    try {
+      store.addPending({ ...it, path: await downloadFile(it.fileId, it.ext) });
     } catch (e) {
-      await say(`No pude descargar una captura: ${redact(e.message)}`);
+      store.addToNextBatch(it);
+      await say(`No pude descargar una captura (${redact(e.message)}). La reintento con el siguiente lote.`);
     }
   }
 }
@@ -151,11 +158,13 @@ async function addToJob(items) {
 // Abre el trabajo y adopta el lote guardado. Hasta store.open no hay ningún await: los updates
 // de un álbum se atienden en paralelo y los siguientes tienen que ver el trabajo ya abierto.
 async function openJob(name, reason = '') {
+  batch.cancel();
   const site = resolveSite(name, cfg.sitesRoot);
   if (!site.ok) return say(notFoundText(name, site));
   const jobDir = makeJobDir(cfg.auditsRoot, site.name);
   store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
   await addToJob(store.takeNextBatch());
+  if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
 
   const opened = `Trabajo abierto en ${site.name}${reason ? ` (${reason})` : ''}.`;
   let dirty = '';
@@ -166,7 +175,6 @@ async function openJob(name, reason = '') {
     return say(`${opened}\nEl repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
   }
   const count = store.job.pending.length;
-  if (count) batch.touch();
   const next = count
     ? `Llevo ${count} elementos. Sigue reenviando; cierro el lote con /plan o tras ${idleText()} sin mensajes.`
     : 'Mándame los issues y termina con /plan.';
@@ -194,7 +202,7 @@ async function receive(ctx, items, { forwarded }) {
   }
   if (forwarded && (busy || job.phase === 'plan' || job.phase === 'implement')) {
     for (const it of tagged) store.addToNextBatch(it);
-    return ctx.reply('Guardado para el siguiente lote.');
+    return say('Guardado para el siguiente lote.');
   }
   await addToJob(tagged);
   if (!store.job || !store.job.pending.length) return;
