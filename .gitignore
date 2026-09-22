@@ -1,4 +1,5 @@
 .env
 state.json
+bot.sock
 node_modules/
 .codebase-memory/
