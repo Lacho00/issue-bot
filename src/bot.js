@@ -12,7 +12,7 @@ import { authorizeMessage, authorizeCallback, isForwarded } from './auth.js';
 import { resolveSite } from './sites.js';
 import { makeJobDir, localDate } from './jobdir.js';
 import { Store, StateError } from './state.js';
-import { buildSettings, decidePermission, describeRequest } from './policy.js';
+import { buildSettings, decidePermission, describeRequest, siteDisablesHooks } from './policy.js';
 import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
@@ -421,7 +421,7 @@ bot.callbackQuery(/^perm:(.+):(allow|deny)$/, async (ctx) => {
 // --- Permisos ---------------------------------------------------------------
 
 async function onPermission({ tool_name, input }) {
-  const decision = decidePermission(tool_name, input);
+  const decision = decidePermission(tool_name, input, { botDir: ROOT });
   if (decision.action === 'deny') return { behavior: 'deny', message: decision.message };
   if (!busy) return { behavior: 'deny', message: 'No hay turno en curso.' };
   const id = randomUUID().slice(0, 8);
@@ -446,6 +446,10 @@ async function onPermission({ tool_name, input }) {
 async function runTurn() {
   const job = store.job;
   if (!job || busy) return;
+  // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
+  if (siteDisablesHooks(job.sitePath)) {
+    return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
+  }
   busy = true;
   try {
     const phase = job.phase === 'implement' ? 'implement' : 'plan';
@@ -459,7 +463,7 @@ async function runTurn() {
       resume: job.started,
       mode: phase === 'plan' ? 'plan' : 'manual',
       systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
-      settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath }),
+      settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath, botDir: ROOT, nodeBin: process.execPath }),
       mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
     });
 
