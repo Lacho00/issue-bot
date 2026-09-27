@@ -7,7 +7,7 @@ Wants=network-online.target
 WorkingDirectory=/srv/http/issue-bot
 ExecStart=/home/lacho/.config/nvm/versions/node/v24.18.0/bin/node src/bot.js
 Environment=PATH=/home/lacho/.local/bin:/home/lacho/.config/nvm/versions/node/v24.18.0/bin:/usr/local/bin:/usr/bin
-Restart=always
+Restart=on-failure
 RestartSec=10
 RestartPreventExitStatus=1
 

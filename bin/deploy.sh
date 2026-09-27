@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# Despliega origin/main en este clon y reinicia el bot cuando quede libre.
+# Despliega origin/main en este clon. Uso: npm run deploy [-- --force]
 #
-# 1. Exige estar en main sin cambios en ficheros versionados.
-# 2. Pasa los tests sobre origin/main en un worktree temporal, antes de tocar el clon.
-# 3. Avanza main (solo fast-forward) y ejecuta npm ci si cambió el lockfile.
-# 4. Pide el reinicio con SIGUSR2: el bot termina el turno en curso, sale y systemd lo
-#    vuelve a arrancar. Al arrancar avisa por Telegram con el commit desplegado.
+# Aquí solo se comprueba y se prueba; el clon no se toca. Si los tests pasan, lanza
+# bin/deploy-apply.sh en una unidad transitoria de systemd (issue-bot-deploy), que espera a
+# que el bot quede libre, actualiza el árbol y lo arranca. Así el comando vuelve enseguida
+# aunque haya un turno largo en curso.
 #
 # --force despliega aunque origin/main sea el último commit desplegado.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE=issue-bot
-STAMP="$REPO/deployed.sha"
-NOTICE="$REPO/deploy-notice.txt"
+WORK="$REPO/.deploy"
 FORCE=0
 [[ "${1:-}" == "--force" ]] && FORCE=1
 
@@ -23,40 +21,48 @@ cd "$REPO"
 [[ "$(git rev-parse --abbrev-ref HEAD)" == main ]] || die "el clon no está en main; trabaja en un worktree"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || die "hay cambios sin commitear en el clon"
 systemctl --user cat "$SERVICE" >/dev/null 2>&1 || die "el servicio $SERVICE no está instalado (ver README)"
+if systemctl --user is-active -q "$SERVICE-deploy"; then die "ya hay un despliegue esperando a que el bot quede libre"; fi
 
 git fetch -q origin main
 TARGET="$(git rev-parse origin/main)"
 git merge-base --is-ancestor HEAD "$TARGET" || die "main local tiene commits que no están en origin/main"
 
-if [[ $FORCE -eq 0 && -f "$STAMP" && "$(cat "$STAMP")" == "$TARGET" ]] && systemctl --user is-active -q "$SERVICE"; then
-  echo "deploy: $TARGET ya está desplegado"
+if [[ $FORCE -eq 0 && -f "$REPO/deployed.sha" && "$(cat "$REPO/deployed.sha")" == "$TARGET" ]] \
+  && systemctl --user is-active -q "$SERVICE"; then
+  echo "deploy: ${TARGET:0:7} ya está desplegado"
   exit 0
 fi
 
+# node_modules instalado para un lockfile: npm deja una copia en node_modules/.package-lock.json.
+modules_match() { cmp -s "$1/package-lock.json" "$1/node_modules/.package-lock.json"; }
+
 echo "deploy: tests sobre ${TARGET:0:7}"
-TMP="$(mktemp -d)"
-cleanup() { git -C "$REPO" worktree remove --force "$TMP/src" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
+rm -rf "$WORK"
+mkdir -p "$WORK"
+cleanup() { git -C "$REPO" worktree remove --force "$WORK/src" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-git worktree add -q --detach "$TMP/src" "$TARGET"
-if git diff --quiet HEAD "$TARGET" -- package-lock.json && [[ -d "$REPO/node_modules" ]]; then
-  ln -s "$REPO/node_modules" "$TMP/src/node_modules"
+git worktree add -q --detach "$WORK/src" "$TARGET"
+
+# Si el node_modules del clon ya vale para el lockfile nuevo se reutiliza; si no, se instala
+# en el worktree y deploy-apply.sh lo mueve al clon con el bot parado.
+NEW_MODULES=""
+if git diff --quiet HEAD "$TARGET" -- package-lock.json && modules_match "$REPO"; then
+  ln -s "$REPO/node_modules" "$WORK/src/node_modules"
 else
-  (cd "$TMP/src" && npm ci --silent)
+  (cd "$WORK/src" && npm ci --silent) || die "npm ci falla en ${TARGET:0:7}"
+  NEW_MODULES="$WORK/node_modules"
 fi
-(cd "$TMP/src" && npm test >"$TMP/test.log" 2>&1) || { tail -30 "$TMP/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
+(cd "$WORK/src" && npm test >"$WORK/test.log" 2>&1) || { tail -30 "$WORK/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
+[[ -n "$NEW_MODULES" ]] && mv "$WORK/src/node_modules" "$NEW_MODULES"
 
-LOCK_CHANGED=0
-git diff --quiet HEAD "$TARGET" -- package-lock.json || LOCK_CHANGED=1
-git merge -q --ff-only "$TARGET"
-[[ $LOCK_CHANGED -eq 1 ]] && npm ci --silent
-
-systemctl --user daemon-reload
-git log -1 --format='%h %s' "$TARGET" >"$NOTICE"
+# Se ejecuta una copia: el merge reescribe bin/ mientras bash todavía lee el script.
+cp "$WORK/src/bin/deploy-apply.sh" "$WORK/deploy-apply.sh"
+systemd-run --user --quiet --collect --unit="$SERVICE-deploy" \
+  --setenv=PATH="$PATH" --working-directory="$REPO" \
+  "$WORK/deploy-apply.sh" "$TARGET" "$NEW_MODULES"
 if systemctl --user is-active -q "$SERVICE"; then
-  systemctl --user kill --kill-whom=main -s SIGUSR2 "$SERVICE"
-  echo "deploy: reinicio pedido; el bot sale al quedar libre y systemd lo arranca"
+  echo "deploy: ${TARGET:0:7} en cola; el bot se reinicia al quedar libre y avisa por Telegram"
 else
-  systemctl --user start "$SERVICE"
-  echo "deploy: servicio arrancado"
+  echo "deploy: ${TARGET:0:7} en cola; el bot arranca en unos segundos"
 fi
-echo "$TARGET" >"$STAMP"
+echo "deploy: seguimiento con journalctl --user -u $SERVICE-deploy"

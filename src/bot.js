@@ -60,6 +60,18 @@ async function say(text, extra = {}) {
   return last;
 }
 
+// Updates en curso: un despliegue espera a que terminen (una captura a medio descargar
+// todavía no está en state.json).
+bot.use(async (ctx, next) => {
+  inflight++;
+  try {
+    await next();
+  } finally {
+    inflight--;
+    if (draining) setImmediate(exitIfIdle);
+  }
+});
+
 // --- Autorización -----------------------------------------------------------
 
 bot.use(async (ctx, next) => {
@@ -485,7 +497,7 @@ async function runTurn() {
   const job = store.job;
   if (!job || busy) return;
   // Con un despliegue pendiente no se abre otro turno: lo pendiente queda en state.json.
-  if (draining) return exitIfIdle();
+  if (draining) return setImmediate(exitIfIdle);
   // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
   if (siteDisablesHooks(job.sitePath)) {
     return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
@@ -571,7 +583,7 @@ async function runTurn() {
     busy = false;
     killCurrent = null;
   }
-  if (draining) return exitIfIdle();
+  if (draining) return setImmediate(exitIfIdle);
   // Los elementos devueltos esperan a «sigue»: reintentar aquí sería un bucle si claude no arranca.
   if (restored) return;
   if (store.job?.pending.length && store.job.phase !== 'collecting') {
@@ -622,16 +634,19 @@ async function deliverReport(turnStart) {
 
 // --- Despliegue -------------------------------------------------------------
 
-// bin/deploy.sh manda SIGUSR2: el bot sale en cuanto no hay turno en curso y systemd
-// (Restart=always) lo arranca con el código nuevo. Un turno a medias no se pierde.
+// bin/deploy.sh manda SIGUSR2: el bot deja de abrir turnos, sale con código 0 cuando no hay
+// turno ni update en curso, y el despliegue actualiza el árbol y lo vuelve a arrancar. El
+// árbol no cambia mientras corre un turno: sus hooks y su MCP cargan código de aquí.
 const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
 let draining = false;
+let inflight = 0;
 let runner = null;
 
 async function exitIfIdle() {
-  if (!draining || busy) return;
+  if (!draining || busy || inflight > 0) return;
   console.log('Despliegue: salgo para cargar el código nuevo');
   await runner?.stop().catch(() => {});
+  if (busy || inflight > 0) return;
   process.exit(0);
 }
 
@@ -639,7 +654,7 @@ process.on('SIGUSR2', () => {
   if (draining) return;
   draining = true;
   console.log(busy ? 'Despliegue pedido: salgo al terminar el turno en curso' : 'Despliegue pedido');
-  exitIfIdle();
+  setImmediate(exitIfIdle);
 });
 
 // --- Arranque ---------------------------------------------------------------
