@@ -18,7 +18,8 @@ const CODEBASE_MEMORY_TOOLS = [
 // Lista Bash del bot por fase. La usa buildSettings (allow) y el hook (lo que no está aquí se pregunta).
 export function BASH_ALLOW(phase) {
   return [
-    ...(phase === 'plan' ? [] : ['Bash(npm run build)', 'Bash(npm run build:*)']),
+    // Solo el comando exacto: sufijos (build:x) o banderas (--node-options) se preguntan.
+    ...(phase === 'plan' ? [] : ['Bash(npm run build)']),
     'Bash(git status:*)',
     'Bash(git diff:*)',
     'Bash(git log:*)',
@@ -45,6 +46,8 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath, botDir = pa
     : dirs.flatMap((d) => [`Edit(${abs(d)}/**)`, `Write(${abs(d)}/**)`, `MultiEdit(${abs(d)}/**)`]);
   const editDenies = [`${sitePath}/.claude`, `${sitePath}/.git`, botDir]
     .flatMap((d) => [`Edit(${abs(d)}/**)`, `Write(${abs(d)}/**)`, `MultiEdit(${abs(d)}/**)`]);
+  // .mcp.json arranca servidores MCP en el siguiente --resume sin pasar por el hook.
+  const mcpDenies = ['Edit', 'Write', 'MultiEdit'].map((t) => `${t}(${abs(sitePath)}/.mcp.json)`);
   // El hook corre antes que cualquier allow de los settings del sitio: ahí manda la política del bot.
   const ctx = Buffer.from(JSON.stringify({ phase, sitePath, jobDir, botDir })).toString('base64');
   return {
@@ -82,6 +85,7 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath, botDir = pa
         'mcp__playwright__browser_run_code_unsafe',
         `Read(${abs(botEnvPath)})`,
         ...editDenies,
+        ...mcpDenies,
       ],
     },
   };
@@ -198,11 +202,16 @@ function editDecision(filePath, ctx) {
   if (!filePath) return { decision: 'ask', reason: 'Pide permiso al dueño: edición sin ruta.' };
   const p = path.resolve(ctx.cwd ?? ctx.sitePath, filePath);
   const segments = p.split('/');
-  if (segments.includes('.claude') || segments.includes('.git') || inside(p, ctx.botDir)) {
-    return { decision: 'deny', reason: 'Prohibido editar .claude, .git o el directorio del bot.' };
+  const base = path.basename(p);
+  if (segments.includes('.claude') || segments.includes('.git') || base === '.mcp.json' || inside(p, ctx.botDir)) {
+    return { decision: 'deny', reason: 'Prohibido editar .claude, .git, .mcp.json o el directorio del bot.' };
   }
-  if (['package.json', 'composer.json'].includes(path.basename(p))) {
+  if (['package.json', 'composer.json'].includes(base)) {
     return { decision: 'ask', reason: 'Pide permiso al dueño: cambia los scripts o dependencias del proyecto.' };
+  }
+  // Ficheros que ejecutan código en npm run build o en los comandos wp permitidos.
+  if (base === '.npmrc' || /\.config\.(?:js|cjs|mjs|ts)$/.test(base) || /^wp-cli.*\.yml$/.test(base)) {
+    return { decision: 'ask', reason: 'Pide permiso al dueño: configuración que ejecutan los comandos permitidos.' };
   }
   if (ctx.phase === 'plan') return { decision: 'ask', reason: 'Pide permiso al dueño: en la fase de plan no se edita.' };
   if (inside(p, ctx.sitePath) || inside(p, ctx.jobDir)) return null;

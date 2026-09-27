@@ -25,7 +25,6 @@ test('implement: sí incluye Edit/Write/MultiEdit y npm run build', () => {
   assert.ok(s.permissions.allow.includes('Edit(//srv/http/tienda-demo/**)'));
   assert.ok(s.permissions.allow.includes('MultiEdit(//srv/http/tienda-demo/**)'));
   assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
-  assert.ok(s.permissions.allow.includes('Bash(npm run build:*)'));
 });
 
 test('playwright: solo herramientas explícitas, sin run_code_unsafe ni file_upload', () => {
@@ -177,7 +176,7 @@ test('hook: composición de shell se pregunta aunque cada parte esté permitida'
 });
 
 test('hook: comandos de la lista del bot, sin composición, siguen el flujo normal', () => {
-  for (const command of ['git status', 'git status --short', 'git diff', 'git diff HEAD -- style.css', 'git log --oneline -5', 'wp option get blogname', 'wp post list --post_type=page', 'npm run build', 'npm run build:css', 'chromium --headless --screenshot --window-size=1280,800 https://tienda-demo.example.com/']) {
+  for (const command of ['git status', 'git status --short', 'git diff', 'git diff HEAD -- style.css', 'git log --oneline -5', 'wp option get blogname', 'wp post list --post_type=page', 'npm run build', 'chromium --headless --screenshot --window-size=1280,800 https://tienda-demo.example.com/']) {
     assert.equal(bash(command), null, command);
   }
 });
@@ -289,4 +288,45 @@ test('siteDisablesHooks detecta disableAllHooks en los settings del sitio', asyn
   assert.equal(siteDisablesHooks(site, site), true);
   writeFileSync(join(site, '.claude', 'settings.local.json'), '{roto');
   assert.equal(siteDisablesHooks(site, site), false);
+});
+
+// --- Segunda tanda -------------------------------------------------------------------------
+
+test('hook: .mcp.json del sitio no se edita', () => {
+  for (const tool of ['Edit', 'Write', 'MultiEdit']) {
+    assert.equal(decisionOf(hookDecision(tool, { file_path: '/srv/http/tienda-demo/.mcp.json' }, imp)), 'deny', tool);
+  }
+  assert.equal(decisionOf(hookDecision('Write', { file_path: '.mcp.json' }, imp)), 'deny');
+});
+
+test('settings: deny estático de .mcp.json del sitio', () => {
+  for (const phase of ['plan', 'implement']) {
+    const s = buildSettings({ ...SETTINGS_ARGS, phase });
+    for (const t of ['Edit', 'Write', 'MultiEdit']) assert.ok(s.permissions.deny.includes(`${t}(//srv/http/tienda-demo/.mcp.json)`), `${phase} ${t}`);
+  }
+});
+
+test('hook: config de build, .npmrc y wp-cli*.yml se preguntan', () => {
+  for (const file_path of [
+    '/srv/http/tienda-demo/.npmrc', '/srv/http/tienda-demo/vite.config.js', '/srv/http/tienda-demo/wp-content/themes/t/postcss.config.cjs',
+    '/srv/http/tienda-demo/wp-content/themes/t/tailwind.config.mjs', '/srv/http/tienda-demo/a/b/webpack.config.ts',
+    '/srv/http/tienda-demo/wp-cli.yml', '/srv/http/tienda-demo/wp-cli.local.yml',
+  ]) {
+    assert.equal(decisionOf(hookDecision('Write', { file_path }, imp)), 'ask', file_path);
+  }
+  assert.equal(hookDecision('Write', { file_path: '/srv/http/tienda-demo/wp-content/themes/t/config.js' }, imp), null);
+});
+
+test('hook: solo npm run build exacto sigue el flujo; cualquier otro npm run se pregunta', () => {
+  assert.equal(bash('npm run build'), null);
+  for (const command of ['npm run build:css', 'npm run build:deploy', 'npm run build --node-options=--require=/tmp/x.js', 'npm run build -- --watch', 'npm run dev']) {
+    assert.equal(decisionOf(bash(command)), 'ask', command);
+  }
+});
+
+test('settings: sin Bash(npm run build:*) en allow ni en BASH_ALLOW', () => {
+  const s = buildSettings({ ...SETTINGS_ARGS, phase: 'implement' });
+  assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
+  assert.ok(!s.permissions.allow.includes('Bash(npm run build:*)'));
+  assert.ok(!BASH_ALLOW('implement').includes('Bash(npm run build:*)'));
 });
