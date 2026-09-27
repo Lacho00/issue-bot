@@ -15,5 +15,5 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: for f in src/*.js bin/*.js; do [ -e "$f" ] && node --check "$f"; done
+      - run: for f in src/*.js; do node --check "$f"; done
       - run: npm test

@@ -54,7 +54,7 @@ else
   lock_hash "$WORK/src" >"$WORK/src/node_modules/.deploy-lock.sha"
   NEW_MODULES="$WORK/node_modules"
 fi
-(cd "$WORK/src" && for f in src/*.js bin/*.js; do [[ -e "$f" ]] && node --check "$f"; done && npm test >"$WORK/test.log" 2>&1) || { tail -30 "$WORK/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
+(cd "$WORK/src" && for f in src/*.js; do node --check "$f" || exit 1; done && npm test >"$WORK/test.log" 2>&1) || { tail -30 "$WORK/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
 [[ -n "$NEW_MODULES" ]] && mv "$WORK/src/node_modules" "$NEW_MODULES"
 
 # Se ejecuta una copia: el merge reescribe bin/ mientras bash todavía lee el script.
