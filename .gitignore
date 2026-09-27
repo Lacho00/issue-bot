@@ -4,3 +4,5 @@ bot.sock
 node_modules/
 .codebase-memory/
 .superpowers/
+deployed.sha
+deploy-notice.txt

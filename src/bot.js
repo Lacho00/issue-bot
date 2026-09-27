@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -484,6 +484,8 @@ async function onPermission({ tool_name, input }) {
 async function runTurn() {
   const job = store.job;
   if (!job || busy) return;
+  // Con un despliegue pendiente no se abre otro turno: lo pendiente queda en state.json.
+  if (draining) return exitIfIdle();
   // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
   if (siteDisablesHooks(job.sitePath)) {
     return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
@@ -569,6 +571,7 @@ async function runTurn() {
     busy = false;
     killCurrent = null;
   }
+  if (draining) return exitIfIdle();
   // Los elementos devueltos esperan a «sigue»: reintentar aquí sería un bucle si claude no arranca.
   if (restored) return;
   if (store.job?.pending.length && store.job.phase !== 'collecting') {
@@ -617,6 +620,28 @@ async function deliverReport(turnStart) {
   return say('Revisa el diff en el repo. Si hay correcciones, escríbelas; si no, /cerrar.');
 }
 
+// --- Despliegue -------------------------------------------------------------
+
+// bin/deploy.sh manda SIGUSR2: el bot sale en cuanto no hay turno en curso y systemd
+// (Restart=always) lo arranca con el código nuevo. Un turno a medias no se pierde.
+const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
+let draining = false;
+let runner = null;
+
+async function exitIfIdle() {
+  if (!draining || busy) return;
+  console.log('Despliegue: salgo para cargar el código nuevo');
+  await runner?.stop().catch(() => {});
+  process.exit(0);
+}
+
+process.on('SIGUSR2', () => {
+  if (draining) return;
+  draining = true;
+  console.log(busy ? 'Despliegue pedido: salgo al terminar el turno en curso' : 'Despliegue pedido');
+  exitIfIdle();
+});
+
 // --- Arranque ---------------------------------------------------------------
 
 bot.catch((err) => console.error('Error del bot:', redact(err.error?.stack ?? err.error ?? err)));
@@ -630,6 +655,11 @@ const RESTART_HINT = {
   reported: 'Escribe correcciones o /cerrar.',
 };
 
+if (existsSync(DEPLOY_NOTICE)) {
+  const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
+  unlinkSync(DEPLOY_NOTICE);
+  if (cfg.ownerId && notice) await say(`Bot actualizado a ${notice}`).catch(() => {});
+}
 if (cfg.ownerId && store.job) {
   const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
   await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
@@ -642,5 +672,5 @@ if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.
 
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 await bot.init();
-run(bot);
+runner = run(bot);
 console.log('issue-bot escuchando');

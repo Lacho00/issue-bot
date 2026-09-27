@@ -42,6 +42,20 @@ que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
    loginctl enable-linger "$USER"   # para que arranque sin sesión abierta
    ```
 
+## Despliegue
+
+`npm run deploy` (`bin/deploy.sh`) despliega `origin/main` en este clon:
+
+1. Exige que el clon esté en `main` y sin cambios en ficheros versionados.
+2. Pasa `npm test` sobre `origin/main` en un worktree temporal. Si falla, no toca nada.
+3. Avanza `main` con fast-forward y ejecuta `npm ci` si cambió `package-lock.json`.
+4. Manda `SIGUSR2` al bot. El bot termina el turno en curso, sale y systemd lo vuelve a
+   arrancar (`Restart=always`). Al arrancar avisa por Telegram: «Bot actualizado a <commit>».
+
+Si el commit ya está desplegado no hace nada; `--force` lo repite. No hay disparo automático:
+se lanza tras fusionar o hacer push a `main` (ver `CLAUDE.md`). GitHub Actions pasa los tests
+en cada PR y en cada push a `main` (`.github/workflows/test.yml`).
+
 ## Uso
 
 - Reenvía al chat los mensajes de la QA (textos, capturas, álbumes). El bot saca los hosts de
