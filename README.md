@@ -42,6 +42,25 @@ que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
    loginctl enable-linger "$USER"   # para que arranque sin sesión abierta
    ```
 
+## Despliegue
+
+`npm run deploy` (`bin/deploy.sh`) despliega `origin/main` en este clon:
+
+1. Exige que el clon esté en `main` y sin cambios en ficheros versionados.
+2. Pasa `npm test` sobre `origin/main` en un worktree temporal (`.deploy/`). Si falla, no
+   toca nada. Si el lockfile cambió, instala ahí el `node_modules` nuevo.
+3. Lanza `bin/deploy-apply.sh` en la unidad transitoria `issue-bot-deploy` y vuelve enseguida.
+4. `deploy-apply.sh` manda `SIGUSR2` al bot. El bot deja de abrir turnos y sale cuando no hay
+   turno ni mensaje en curso. Entonces avanza `main` con fast-forward, cambia `node_modules` si
+   hace falta y arranca el servicio. El árbol no cambia mientras corre un turno.
+5. Al arrancar, el bot avisa por Telegram: «Bot actualizado a <commit>». Si algo falla con el bot
+   parado, vuelve al commit anterior, lo arranca igual y el aviso dice por qué.
+
+Si el commit ya está desplegado no hace nada; `--force` lo repite. Seguimiento:
+`journalctl --user -u issue-bot-deploy`. No hay disparo automático: se lanza tras fusionar o
+hacer push a `main` (ver `CLAUDE.md`). GitHub Actions pasa los tests en cada PR y en cada push a
+`main` (`.github/workflows/test.yml`).
+
 ## Uso
 
 - Reenvía al chat los mensajes de la QA (textos, capturas, álbumes). El bot saca los hosts de

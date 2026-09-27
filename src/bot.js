@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -59,6 +59,18 @@ async function say(text, extra = {}) {
   }
   return last;
 }
+
+// Updates en curso: un despliegue espera a que terminen (una captura a medio descargar
+// todavía no está en state.json).
+bot.use(async (ctx, next) => {
+  inflight++;
+  try {
+    await next();
+  } finally {
+    inflight--;
+    if (draining) setImmediate(exitIfIdle);
+  }
+});
 
 // --- Autorización -----------------------------------------------------------
 
@@ -484,6 +496,8 @@ async function onPermission({ tool_name, input }) {
 async function runTurn() {
   const job = store.job;
   if (!job || busy) return;
+  // Con un despliegue pendiente no se abre otro turno: lo pendiente queda en state.json.
+  if (draining) return setImmediate(exitIfIdle);
   // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
   if (siteDisablesHooks(job.sitePath)) {
     return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
@@ -569,6 +583,7 @@ async function runTurn() {
     busy = false;
     killCurrent = null;
   }
+  if (draining) return setImmediate(exitIfIdle);
   // Los elementos devueltos esperan a «sigue»: reintentar aquí sería un bucle si claude no arranca.
   if (restored) return;
   if (store.job?.pending.length && store.job.phase !== 'collecting') {
@@ -617,6 +632,35 @@ async function deliverReport(turnStart) {
   return say('Revisa el diff en el repo. Si hay correcciones, escríbelas; si no, /cerrar.');
 }
 
+// --- Despliegue -------------------------------------------------------------
+
+// bin/deploy.sh manda SIGUSR2: el bot deja de abrir turnos, sale con código 0 cuando no hay
+// turno ni update en curso, y el despliegue actualiza el árbol y lo vuelve a arrancar. El
+// árbol no cambia mientras corre un turno: sus hooks y su MCP cargan código de aquí.
+const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
+const READY_FILE = path.join(ROOT, 'bot.ready');
+let draining = false;
+let inflight = 0;
+let runner = null;
+let stopping = null;
+
+async function exitIfIdle() {
+  if (!draining || busy || inflight > 0) return;
+  // runner.stop() devuelve la tarea solo la primera vez; las siguientes llamadas la reutilizan.
+  stopping ??= Promise.resolve(runner?.stop()).catch(() => {});
+  await stopping;
+  if (busy || inflight > 0) return;
+  console.log('Despliegue: salgo para cargar el código nuevo');
+  process.exit(0);
+}
+
+process.on('SIGUSR2', () => {
+  if (draining) return;
+  draining = true;
+  console.log(busy ? 'Despliegue pedido: salgo al terminar el turno en curso' : 'Despliegue pedido');
+  setImmediate(exitIfIdle);
+});
+
 // --- Arranque ---------------------------------------------------------------
 
 bot.catch((err) => console.error('Error del bot:', redact(err.error?.stack ?? err.error ?? err)));
@@ -630,6 +674,11 @@ const RESTART_HINT = {
   reported: 'Escribe correcciones o /cerrar.',
 };
 
+if (existsSync(DEPLOY_NOTICE)) {
+  const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
+  unlinkSync(DEPLOY_NOTICE);
+  if (cfg.ownerId && notice) await say(`Bot actualizado a ${notice}`).catch(() => {});
+}
 if (cfg.ownerId && store.job) {
   const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
   await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
@@ -642,5 +691,7 @@ if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.
 
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 await bot.init();
-run(bot);
+runner = run(bot);
+// deploy-apply.sh espera este fichero para dar por bueno el arranque.
+writeFileSync(READY_FILE, `${process.pid}\n`);
 console.log('issue-bot escuchando');
