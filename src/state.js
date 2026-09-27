@@ -36,7 +36,7 @@ export class Store {
 
   open({ site, sitePath, jobDir, sessionId }) {
     if (this.job) throw new StateError('job-open');
-    this.job = { site, sitePath, jobDir, sessionId, phase: 'collecting', round: 1, started: false, pending: [], imageCount: 0, contextTokens: 0 };
+    this.job = { site, sitePath, jobDir, sessionId, phase: 'collecting', round: 1, started: false, pending: [], imageCount: 0, contextTokens: 0, awaitingDirty: false, planTurns: 0 };
     this.save();
   }
 
@@ -64,6 +64,27 @@ export class Store {
     this.job.pending = [];
     this.save();
     return items;
+  }
+
+  // Un turno que falló antes de crear la sesión no llegó a Claude: sus elementos vuelven a la cola.
+  returnPending(items) {
+    this.#require();
+    this.job.pending = [...items, ...this.job.pending];
+    this.save();
+  }
+
+  setAwaitingDirty(value) {
+    this.#require();
+    this.job.awaitingDirty = value === true;
+    this.save();
+  }
+
+  // Cada turno de plan invalida los botones «Aprobar plan» de los anteriores.
+  beginPlanTurn() {
+    this.#require();
+    this.job.planTurns = (this.job.planTurns ?? 0) + 1;
+    this.save();
+    return this.job.planTurns;
   }
 
   startPlan() {

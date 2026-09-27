@@ -117,3 +117,42 @@ test('state.json anterior sin round ni nextBatch se carga', () => {
   st.startPlan();
   assert.equal(st.job.round, 2);
 });
+
+test('returnPending devuelve los elementos al frente de pending y persiste', () => {
+  const f = file();
+  const st = new Store(f);
+  st.open(base);
+  st.addPending({ type: 'text', text: 'a' });
+  const taken = st.takePending();
+  st.addPending({ type: 'text', text: 'b' });
+  st.returnPending(taken);
+  assert.deepEqual(st.job.pending.map((i) => i.text), ['a', 'b']);
+  const again = new Store(f);
+  again.load();
+  assert.deepEqual(again.job.pending.map((i) => i.text), ['a', 'b']);
+  st.close();
+  assert.throws(() => st.returnPending(taken), (e) => e.code === 'no-job');
+});
+
+test('awaitingDirty se guarda en el trabajo y se limpia', () => {
+  const f = file();
+  const st = new Store(f);
+  st.open(base);
+  assert.equal(st.job.awaitingDirty, false);
+  st.setAwaitingDirty(true);
+  const again = new Store(f);
+  again.load();
+  assert.equal(again.job.awaitingDirty, true);
+  st.setAwaitingDirty(false);
+  assert.equal(st.job.awaitingDirty, false);
+});
+
+test('beginPlanTurn numera los turnos de plan del trabajo', () => {
+  const st = new Store(file());
+  st.open(base);
+  assert.equal(st.job.planTurns, 0);
+  assert.equal(st.beginPlanTurn(), 1);
+  assert.equal(st.beginPlanTurn(), 2);
+  delete st.job.planTurns; // trabajo guardado por una versión anterior
+  assert.equal(st.beginPlanTurn(), 1);
+});

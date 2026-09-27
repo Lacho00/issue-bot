@@ -110,8 +110,7 @@ bot.command('nuevo', async (ctx) => {
   const from = store.job.site;
   for (const it of store.takePending()) store.addToNextBatch(unmaterialize(it));
   closeJob();
-  await say(`Cambio el trabajo de ${from} a ${target.name}.`);
-  return openJob(target.name);
+  return openJob(target.name, '', `Cambio el trabajo de ${from} a ${target.name}.`);
 });
 
 bot.command('plan', () => batch.flush());
@@ -175,21 +174,44 @@ async function addToJob(items) {
 
 // Abre el trabajo y adopta el lote guardado. Hasta store.open no hay ningún await: los updates
 // de un álbum se atienden en paralelo y los siguientes tienen que ver el trabajo ya abierto.
-async function openJob(name, reason = '') {
-  batch.cancel();
+// `before` es el aviso del cierre anterior: se manda ya con el trabajo nuevo abierto, para que
+// ningún update se cuele entre el cierre y la apertura.
+async function openJob(name, reason = '', before = '') {
   const site = resolveSite(name, cfg.sitesRoot);
-  if (!site.ok) return say(notFoundText(name, site));
+  if (!site.ok) {
+    if (before) await say(before);
+    return say(notFoundText(name, site));
+  }
+  const busyMsg = () => `Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`;
+  if (store.job) {
+    if (before) await say(before);
+    return say(busyMsg());
+  }
+  batch.cancel();
   const jobDir = makeJobDir(cfg.auditsRoot, site.name);
-  store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
+  try {
+    store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
+  } catch (e) {
+    if (!(e instanceof StateError) || e.code !== 'job-open') throw e;
+    if (before) await say(before);
+    return say(busyMsg());
+  }
+  const sessionId = store.job.sessionId;
   lastPrompt = '';
-  await addToJob(store.takeNextBatch());
-  if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
-
-  const opened = `Trabajo abierto en ${site.name}${reason ? ` (${reason})` : ''}.`;
+  const saved = store.takeNextBatch();
   let dirty = '';
   try { dirty = execFileSync('git', ['-C', site.path, 'status', '--short'], { encoding: 'utf8' }).trim(); } catch { dirty = ''; }
+  // Con el repo sucio el lote no se cierra solo hasta que el dueño diga Seguir.
+  if (dirty) store.setAwaitingDirty(true);
+
+  if (before) await say(before);
+  await addToJob(saved);
+  if (store.job?.sessionId !== sessionId) return;
+  if (!dirty && store.job.phase === 'collecting' && store.job.pending.length) batch.touch();
+
+  const opened = `Trabajo abierto en ${site.name}${reason ? ` (${reason})` : ''}.`;
   if (dirty) {
-    const sid = store.job.sessionId.slice(0, 8);
+    const sid = sessionId.slice(0, 8);
     const kb = new InlineKeyboard().text('Seguir', `dirty:go:${sid}`).text('Cancelar', `dirty:cancel:${sid}`);
     return say(`${opened}\nEl repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
   }
@@ -243,7 +265,7 @@ async function receive(ctx, items, { forwarded, hosts = [] }) {
   await addToJob(tagged);
   if (!store.job || !store.job.pending.length) return;
   if (store.job.phase === 'collecting') {
-    batch.touch();
+    if (!store.job.awaitingDirty) batch.touch();
     return;
   }
   if (busy) return ctx.reply('Anotado. Entra en el siguiente turno.');
@@ -254,14 +276,14 @@ async function receive(ctx, items, { forwarded, hosts = [] }) {
 // Lote guardado sin turno en curso: tras el informe cierra el trabajo y empieza otro.
 async function processNextBatch() {
   if (busy || !store.nextBatch.length) return;
+  let before = '';
   if (store.job) {
     if (store.job.phase !== 'reported') return;
-    const site = store.job.site;
+    before = `Nuevo lote de QA. Cierro el trabajo en ${store.job.site}.`;
     closeJob();
-    await say(`Nuevo lote de QA. Cierro el trabajo en ${site}.`);
   }
   batch.touch();
-  return detectAndOpen(batchHosts());
+  return detectAndOpen(batchHosts(), before);
 }
 
 function siteKeyboard(sites) {
@@ -273,11 +295,16 @@ function siteKeyboard(sites) {
 }
 
 // Sin trabajo abierto: un solo sitio abre el trabajo; varios o ninguno, botones. Nunca adivina.
-async function detectAndOpen(hosts) {
-  if (store.job || !hosts.length) return;
+// `before` se manda después de abrir (si hay un solo sitio) o antes de preguntar.
+async function detectAndOpen(hosts, before = '') {
+  if (store.job || !hosts.length) {
+    if (before) await say(before);
+    return;
+  }
   const index = buildIndex();
   const m = matchSite(hosts, index);
-  if (m.kind === 'one') return openJob(m.site, `detectado por ${m.host}`);
+  if (m.kind === 'one') return openJob(m.site, `detectado por ${m.host}`, before);
+  if (before) await say(before);
   const key = hosts.join(' ');
   if (key === lastPrompt) return;
   lastPrompt = key;
@@ -324,6 +351,7 @@ bot.on(['message:text', 'message:photo', 'message:document'], handleContent);
 async function closeBatch() {
   try {
     if (conflict) return await say(`Antes de seguir, dime si cambio a ${conflict.site} o lo añado a ${store.job?.site}.`);
+    if (store.job?.awaitingDirty) return await say('Antes de seguir, dime si sigo con el repo con cambios sin commitear (botones de arriba).');
     if (!store.job && store.nextBatch.length) {
       return await say(batchHosts().length ? 'Elige el sitio en los botones de arriba o usa /nuevo <sitio>.' : '¿De qué sitio es? Usa /nuevo <sitio>.');
     }
@@ -350,16 +378,19 @@ async function requestPlan() {
 bot.callbackQuery(/^dirty:go:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
+  store.setAwaitingDirty(false);
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (store.job.phase === 'collecting' && store.job.pending.length) batch.touch();
+  if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
   return say(`Sigo. Mándame los issues y termina con /plan (o espera ${idleText()} sin mensajes).`);
 });
 
 bot.callbackQuery(/^dirty:cancel:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
+  if (busy) return say('Claude está trabajando: no puedo cancelar el trabajo ahora. Usa /cancelar primero.');
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (store.job && !busy) closeJob();
+  if (store.job?.sessionId.slice(0, 8) !== ctx.match[1] || busy) return;
+  closeJob();
   return say('Trabajo cancelado.');
 });
 
@@ -385,8 +416,7 @@ bot.callbackQuery(/^switch:(.+)$/, async (ctx) => {
   const { site } = conflict;
   const from = store.job.site;
   closeJob();
-  await say(`Trabajo en ${from} cerrado.`);
-  return openJob(site);
+  return openJob(site, '', `Trabajo en ${from} cerrado.`);
 });
 
 bot.callbackQuery(/^keep:(.+)$/, async (ctx) => {
@@ -396,11 +426,19 @@ bot.callbackQuery(/^keep:(.+)$/, async (ctx) => {
   conflict = null;
   const site = store.job.site;
   await addToJob(store.takeNextBatch());
-  batch.touch();
+  if (store.job && !store.job.awaitingDirty) batch.touch();
   return say(`Añadido a ${site}.`);
 });
 
-bot.callbackQuery('approve', async (ctx) => {
+// approve:<sid8>:<ronda>:<turno de plan>. Solo vale el botón del último turno de plan del trabajo.
+const approveData = (job) => `approve:${job.sessionId.slice(0, 8)}:${job.round ?? 1}:${job.planTurns ?? 0}`;
+
+bot.callbackQuery(/^approve(?::.*)?$/, async (ctx) => {
+  const j = store.job;
+  if (!j || j.phase !== 'plan' || ctx.callbackQuery.data !== approveData(j)) {
+    await ctx.answerCallbackQuery({ text: 'Ese plan ya no vale.' });
+    return ctx.editMessageReplyMarkup().catch(() => {});
+  }
   await ctx.answerCallbackQuery();
   if (busy) return say('Claude sigue trabajando; espera a que termine.');
   try { store.approve(); } catch { return say('No hay ningún plan pendiente de aprobar.'); }
@@ -451,10 +489,12 @@ async function runTurn() {
     return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
   }
   busy = true;
+  let restored = false;
   try {
     const phase = job.phase === 'implement' ? 'implement' : 'plan';
     const status = await say(phase === 'plan' ? 'Analizando…' : 'Implementando…');
     const items = store.takePending();
+    if (phase === 'plan') store.beginPlanTurn();
     const turnStart = new Date();
     let lastEdit = 0;
 
@@ -486,6 +526,11 @@ async function runTurn() {
     const r = await turn.promise;
 
     if (r.sessionSeen && !job.started) store.markStarted();
+    // Sin sesión Claude no llegó a leer nada: los elementos vuelven a la cola para «sigue».
+    if (!r.sessionSeen && store.job?.sessionId === job.sessionId) {
+      store.returnPending(items);
+      restored = true;
+    }
     if (r.contextTokens) store.setContextTokens(r.contextTokens);
     await bot.api.deleteMessage(chat(), status.message_id).catch(() => {});
 
@@ -497,7 +542,7 @@ async function runTurn() {
         await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
       } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
       else if (phase === 'plan') {
-        await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', 'approve') });
+        await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', approveData(store.job)) });
       } else {
         await say(r.text || 'Implementación terminada.');
         await deliverReport(turnStart);
@@ -513,6 +558,8 @@ async function runTurn() {
     busy = false;
     killCurrent = null;
   }
+  // Los elementos devueltos esperan a «sigue»: reintentar aquí sería un bucle si claude no arranca.
+  if (restored) return;
   if (store.job?.pending.length && store.job.phase !== 'collecting') {
     if (store.job.phase === 'reported') store.startPlan();
     return runTurn();
@@ -568,7 +615,7 @@ if (cfg.ownerId && store.nextBatch.length) {
   await say(`Tengo ${store.nextBatch.length} elementos guardados para el siguiente lote.`).catch(() => {});
 }
 if (!store.job && store.nextBatch.length) batch.touch();
-if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
+if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.awaitingDirty) batch.touch();
 
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 await bot.init();
