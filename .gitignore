@@ -8,3 +8,4 @@ deployed.sha
 deploy-notice.txt
 .deploy/
 node_modules.old/
+bot.ready

@@ -33,8 +33,9 @@ if [[ $FORCE -eq 0 && -f "$REPO/deployed.sha" && "$(cat "$REPO/deployed.sha")" =
   exit 0
 fi
 
-# node_modules instalado para un lockfile: npm deja una copia en node_modules/.package-lock.json.
-modules_match() { cmp -s "$1/package-lock.json" "$1/node_modules/.package-lock.json"; }
+# Tras cada npm ci del despliegue se guarda el hash del lockfile en node_modules/.deploy-lock.sha.
+lock_hash() { sha256sum "$1/package-lock.json" | cut -d' ' -f1; }
+modules_match() { [[ "$(cat "$1/node_modules/.deploy-lock.sha" 2>/dev/null)" == "$(lock_hash "$1")" ]]; }
 
 echo "deploy: tests sobre ${TARGET:0:7}"
 rm -rf "$WORK"
@@ -50,9 +51,10 @@ if git diff --quiet HEAD "$TARGET" -- package-lock.json && modules_match "$REPO"
   ln -s "$REPO/node_modules" "$WORK/src/node_modules"
 else
   (cd "$WORK/src" && npm ci --silent) || die "npm ci falla en ${TARGET:0:7}"
+  lock_hash "$WORK/src" >"$WORK/src/node_modules/.deploy-lock.sha"
   NEW_MODULES="$WORK/node_modules"
 fi
-(cd "$WORK/src" && npm test >"$WORK/test.log" 2>&1) || { tail -30 "$WORK/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
+(cd "$WORK/src" && for f in src/*.js bin/*.js; do [[ -e "$f" ]] && node --check "$f"; done && npm test >"$WORK/test.log" 2>&1) || { tail -30 "$WORK/test.log" >&2; die "los tests fallan en ${TARGET:0:7}; no despliego"; }
 [[ -n "$NEW_MODULES" ]] && mv "$WORK/src/node_modules" "$NEW_MODULES"
 
 # Se ejecuta una copia: el merge reescribe bin/ mientras bash todavía lee el script.

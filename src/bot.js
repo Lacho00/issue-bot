@@ -638,15 +638,19 @@ async function deliverReport(turnStart) {
 // turno ni update en curso, y el despliegue actualiza el árbol y lo vuelve a arrancar. El
 // árbol no cambia mientras corre un turno: sus hooks y su MCP cargan código de aquí.
 const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
+const READY_FILE = path.join(ROOT, 'bot.ready');
 let draining = false;
 let inflight = 0;
 let runner = null;
+let stopping = null;
 
 async function exitIfIdle() {
   if (!draining || busy || inflight > 0) return;
-  console.log('Despliegue: salgo para cargar el código nuevo');
-  await runner?.stop().catch(() => {});
+  // runner.stop() devuelve la tarea solo la primera vez; las siguientes llamadas la reutilizan.
+  stopping ??= Promise.resolve(runner?.stop()).catch(() => {});
+  await stopping;
   if (busy || inflight > 0) return;
+  console.log('Despliegue: salgo para cargar el código nuevo');
   process.exit(0);
 }
 
@@ -688,4 +692,6 @@ if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 await bot.init();
 runner = run(bot);
+// deploy-apply.sh espera este fichero para dar por bueno el arranque.
+writeFileSync(READY_FILE, `${process.pid}\n`);
 console.log('issue-bot escuchando');
