@@ -498,30 +498,41 @@ async function runTurn() {
     const turnStart = new Date();
     let lastEdit = 0;
 
-    const args = buildArgs({
-      sessionId: job.sessionId,
-      resume: job.started,
-      mode: phase === 'plan' ? 'plan' : 'manual',
-      systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
-      settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath, botDir: ROOT, nodeBin: process.execPath }),
-      mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
-    });
+    let args;
+    let turn;
+    try {
+      args = buildArgs({
+        sessionId: job.sessionId,
+        resume: job.started,
+        mode: phase === 'plan' ? 'plan' : 'manual',
+        systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
+        settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath, botDir: ROOT, nodeBin: process.execPath }),
+        mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
+      });
 
-    const turn = startTurn({
-      bin: cfg.claudeBin,
-      cwd: job.sitePath,
-      args,
-      prompt: userMessage(items),
-      timeoutMs: cfg.turnTimeoutMs,
-      env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
-      onEvent: (e) => {
-        if (e.type === 'system' && e.subtype === 'init' && !store.job?.started) store.markStarted();
-        const s = statusFromEvent(e);
-        if (!s || Date.now() - lastEdit < 4000) return;
-        lastEdit = Date.now();
-        bot.api.editMessageText(chat(), status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
-      },
-    });
+      turn = startTurn({
+        bin: cfg.claudeBin,
+        cwd: job.sitePath,
+        args,
+        prompt: userMessage(items),
+        timeoutMs: cfg.turnTimeoutMs,
+        env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
+        onEvent: (e) => {
+          if (e.type === 'system' && e.subtype === 'init' && !store.job?.started) store.markStarted();
+          const s = statusFromEvent(e);
+          if (!s || Date.now() - lastEdit < 4000) return;
+          lastEdit = Date.now();
+          bot.api.editMessageText(chat(), status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
+        },
+      });
+    } catch (e) {
+      // Fallo síncrono antes de lanzar claude: los elementos vuelven a la cola para «sigue».
+      if (store.job?.sessionId === job.sessionId) store.returnPending(items);
+      restored = true;
+      await bot.api.deleteMessage(chat(), status.message_id).catch(() => {});
+      await say(`No pude lanzar a Claude: ${redact(e.message)}. Escribe «sigue» para reintentar.`).catch(() => {});
+      return;
+    }
     killCurrent = turn.kill;
     const r = await turn.promise;
 
