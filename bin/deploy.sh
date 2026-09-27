@@ -17,6 +17,9 @@ FORCE=0
 
 die() { echo "deploy: $*" >&2; exit 1; }
 cd "$REPO"
+# npm run exporta la config del usuario como npm_config_*; un npm ci anidado la toma como
+# flags de línea de comandos y rechaza algunas (EALLOWSCRIPTS con allow-scripts).
+while read -r var; do unset "$var"; done < <(compgen -e | grep -i '^npm_config_')
 
 [[ "$(git rev-parse --abbrev-ref HEAD)" == main ]] || die "el clon no está en main; trabaja en un worktree"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || die "hay cambios sin commitear en el clon"
