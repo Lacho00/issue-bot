@@ -183,7 +183,7 @@ export const STATUSES = {
   pendiente: { label: 'Pendiente', tone: 'bad', plural: 'Pendientes' },
 };
 
-const statusKey = (s) => (String(s ?? '').toLowerCase() in STATUSES ? String(s).toLowerCase() : 'otro');
+const statusKey = (s) => (Object.hasOwn(STATUSES, String(s ?? '').toLowerCase()) ? String(s).toLowerCase() : 'otro');
 const statusLabel = (s) => STATUSES[statusKey(s)]?.label ?? String(s ?? '—');
 
 export function parseQaReport(text) {
@@ -243,8 +243,9 @@ function issueCard(issue, i) {
   const files = Array.isArray(issue.files) && issue.files.length
     ? `<h3>Archivos</h3><ul class="files">${issue.files.map((f) => `<li><code>${escapeHtml(f)}</code></li>`).join('')}</ul>`
     : '';
-  const measurements = Array.isArray(issue.measurements) && issue.measurements.length
-    ? `<h3>Medidas</h3><div class="scroll"><table><thead><tr><th>Elemento</th><th>Propiedad</th><th>Antes</th><th>Después</th></tr></thead><tbody>${issue.measurements
+  const rows = (Array.isArray(issue.measurements) ? issue.measurements : []).filter((m) => m && typeof m === 'object');
+  const measurements = rows.length
+    ? `<h3>Medidas</h3><div class="scroll"><table><thead><tr><th>Elemento</th><th>Propiedad</th><th>Antes</th><th>Después</th></tr></thead><tbody>${rows
         .map(
           (m) =>
             `<tr><td><code>${escapeHtml(m.element ?? '')}</code>${m.viewport ? ` <span class="muted">${escapeHtml(m.viewport)}</span>` : ''}</td><td>${escapeHtml(

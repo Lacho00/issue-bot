@@ -142,3 +142,13 @@ test('parseQaReport valida la forma mínima', () => {
 test('qaSummary da una línea por issue con su estado', () => {
   assert.equal(qaSummary(REPORT), '1. Icono de búsqueda negro — Corregido\n2. Texto legal — No es de código');
 });
+
+test('renderQaReport ignora medidas que no son objetos', () => {
+  const out = renderQaReport({ issues: [{ title: 'X', status: 'pendiente', measurements: [null, 'texto', { element: 'h1', property: 'color', before: 'a', after: 'b' }] }] });
+  assert.match(out, /<code>h1<\/code>/);
+});
+
+test('renderQaReport trata un estado heredado de Object.prototype como otro', () => {
+  const out = renderQaReport({ issues: [{ title: 'X', status: 'constructor' }] });
+  assert.match(out, /chip st-otro/);
+});

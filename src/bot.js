@@ -591,11 +591,11 @@ async function deliverReport(turnStart) {
     let report;
     try {
       report = parseQaReport(readFileSync(jsonPath, 'utf8'));
+      htmlSource = renderQaReport(report, { site: job.site, date: localDate() });
+      summary = qaSummary(report);
     } catch (err) {
       return say(`${err.message}. Escribe «sigue» para que Claude lo corrija.`);
     }
-    htmlSource = renderQaReport(report, { site: job.site, date: localDate() });
-    summary = qaSummary(report);
     writeFileSync(htmlPath, htmlSource);
   } else if (isFresh(htmlPath)) {
     htmlSource = readFileSync(htmlPath, 'utf8');
