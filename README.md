@@ -57,7 +57,11 @@ que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
 - Si reenvías algo de otro sitio con un lote abierto, el bot pregunta: **Cambiar a Y** o
   **Añadir a X**.
 - Discute el plan por chat y pulsa **Aprobar plan**.
-- Recibes `informe-<sitio>-<fecha>.html` y la tabla resumen. Después:
+- Recibes `informe-<sitio>-<fecha>.html` y una línea de estado por issue. Claude escribe
+  `informe.json` en la carpeta del trabajo y el bot lo convierte en HTML con el estilo del informe
+  de `/wp-audit`: KPIs por estado y una tarjeta por issue con el mensaje de la QA y las fotos
+  **Antes** (las de la QA) y **Después** (capturas de Claude) lado a lado. Si no hay
+  `informe.json`, usa `informe.md` como respaldo. Después:
   - lo que escribas tú es una corrección: nueva ronda del mismo trabajo;
   - un reenvío es un lote nuevo de QA: cierra el trabajo y abre otro para el sitio detectado.
 - Los reenvíos que llegan mientras Claude trabaja, o con un plan sin aprobar, se guardan para el

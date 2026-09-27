@@ -16,7 +16,7 @@ import { buildSettings, decidePermission, describeRequest, siteDisablesHooks } f
 import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
-import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from './report.js';
+import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, renderQaReport, parseQaReport, qaSummary } from './report.js';
 import { createBatchTimer } from './batch.js';
 import { buildSiteIndex } from './site-index.js';
 import { extractHosts, matchSite, siteQuery } from './detect.js';
@@ -581,23 +581,35 @@ async function runTurn() {
 async function deliverReport(turnStart) {
   const job = store.job;
   const htmlPath = path.join(job.jobDir, 'informe.html');
+  const jsonPath = path.join(job.jobDir, 'informe.json');
   const mdPath = path.join(job.jobDir, 'informe.md');
   const isFresh = (p) => existsSync(p) && (!turnStart || statSync(p).mtime >= turnStart);
 
   let htmlSource;
-  if (isFresh(htmlPath)) {
+  let summary = '';
+  if (isFresh(jsonPath)) {
+    let report;
+    try {
+      report = parseQaReport(readFileSync(jsonPath, 'utf8'));
+      htmlSource = renderQaReport(report, { site: job.site, date: localDate() });
+      summary = qaSummary(report);
+    } catch (err) {
+      return say(`${err.message}. Escribe «sigue» para que Claude lo corrija.`);
+    }
+    writeFileSync(htmlPath, htmlSource);
+  } else if (isFresh(htmlPath)) {
     htmlSource = readFileSync(htmlPath, 'utf8');
   } else if (isFresh(mdPath)) {
     const md = readFileSync(mdPath, 'utf8');
     htmlSource = renderReport(md, { title: `QA ${job.site} ${localDate()}` });
     writeFileSync(htmlPath, htmlSource);
   } else {
-    return say(`Claude terminó sin escribir ${mdPath}. Escribe «sigue» para pedírselo.`);
+    return say(`Claude terminó sin escribir ${jsonPath}. Escribe «sigue» para pedírselo.`);
   }
 
   const html = inlineImages(htmlSource, job.jobDir);
   const missing = unembeddedRefs(html);
-  const summary = existsSync(mdPath) ? summaryFromMarkdown(readFileSync(mdPath, 'utf8')) : '';
+  if (!summary && existsSync(mdPath)) summary = summaryFromMarkdown(readFileSync(mdPath, 'utf8'));
   await bot.api.sendDocument(chat(), new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
   store.finishImplement();
   if (summary) await say(summary);
