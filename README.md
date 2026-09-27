@@ -79,9 +79,11 @@ bot la aplica un hook `PreToolUse` (`src/policy-hook.js`) que corre antes que cu
 - Deniega `git commit`, `push`, `add`, `restore`, `checkout` (salvo `-b`), `reset --hard`,
   `clean`, `diff --no-index` y `--output`; `wp db drop`, `reset` e `import`; instalar
   Playwright; `file://`; y tocar el directorio del bot. Tampoco se edita nada bajo `.claude`
-  ni `.git`.
+  ni `.git`, ni el `.mcp.json` del sitio.
 - Pregunta por Telegram cualquier Bash fuera de la lista del bot o que componga órdenes
-  (`;`, `&&`, `|`, redirecciones, `$(…)`), los cambios en `package.json` o `composer.json`,
+  (`;`, `&&`, `|`, redirecciones, `$(…)`); de `npm run` solo pasa sin preguntar `npm run build` exacto.
+  También pregunta los cambios en `package.json`, `composer.json`, `.npmrc`,
+  `*.config.{js,cjs,mjs,ts}` y `wp-cli*.yml`,
   toda edición en la fase de plan y, al implementar, la que caiga fuera del sitio y de la
   carpeta del trabajo.
 
