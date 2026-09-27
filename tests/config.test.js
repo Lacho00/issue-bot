@@ -69,3 +69,12 @@ test('loadConfig: BATCH_IDLE_MS numérico', () => {
   writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nBATCH_IDLE_MS=5000\n');
   assert.equal(loadConfig(envPath).batchIdleMs, 5000);
 });
+
+test('loadConfig: VHOST_DIR por defecto y configurable', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\n');
+  assert.equal(loadConfig(envPath).vhostDir, '/etc/httpd/conf/extra');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nVHOST_DIR=/tmp/vhosts-prueba\n');
+  assert.equal(loadConfig(envPath).vhostDir, '/tmp/vhosts-prueba');
+});

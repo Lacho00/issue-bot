@@ -18,6 +18,8 @@ import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
 import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from './report.js';
 import { createBatchTimer } from './batch.js';
+import { buildSiteIndex } from './site-index.js';
+import { extractHosts, matchSite, siteQuery } from './detect.js';
 
 const cfg = loadConfig();
 if (!cfg.token) {
@@ -39,6 +41,13 @@ const permissions = new Map();
 const batch = createBatchTimer(cfg.batchIdleMs, () => closeBatch());
 const idleText = () => (cfg.batchIdleMs >= 60_000 ? `${Math.round(cfg.batchIdleMs / 60_000)} min` : `${Math.round(cfg.batchIdleMs / 1000)} s`);
 const notFoundText = (name, site) => `No existe ${cfg.sitesRoot}/${name}.${site.suggestions.length ? `\n¿Quizá: ${site.suggestions.join(', ')}?` : ''}`;
+// Se reconstruye en cada detección: son unos pocos ficheros y así nunca queda viejo.
+const buildIndex = () => buildSiteIndex({ sitesRoot: cfg.sitesRoot, vhostDir: cfg.vhostDir });
+const batchHosts = () => [...new Set(store.nextBatch.flatMap((it) => it.hosts ?? []))];
+// Una captura ya descargada vuelve a ser fileId para descargarse en la carpeta de otro trabajo.
+const unmaterialize = (it) => (it.type === 'image' && it.fileId ? { ...it, path: undefined } : it);
+let conflict = null; // { site, sid } mientras se decide «Cambiar a Y» / «Añadir a X»
+let lastPrompt = ''; // hosts de la última pregunta de sitio, para no repetirla en cada foto de un álbum
 
 const PHASE_LABEL = { collecting: 'recogida', plan: 'plan', implement: 'implementación', reported: 'informe entregado' };
 
@@ -87,13 +96,22 @@ bot.use((ctx, next) => (ctx.message && isForwarded(ctx.message) ? handleContent(
 
 // --- Comandos ---------------------------------------------------------------
 
-bot.command('start', (ctx) => ctx.reply('Comandos: /nuevo <sitio>, /plan, /estado, /cancelar, /cerrar'));
+bot.command('start', (ctx) => ctx.reply('Reenvíame los mensajes de la QA: detecto el sitio por sus URLs. Comandos: /nuevo <sitio>, /plan, /estado, /cancelar, /cerrar'));
 
 bot.command('nuevo', async (ctx) => {
-  if (store.job) return ctx.reply(`Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`);
   const name = ctx.match?.trim();
   if (!name) return ctx.reply('¿De qué sitio es? Usa /nuevo <sitio>.');
-  return openJob(name);
+  if (!store.job) return openJob(name);
+  // /nuevo explícito gana a la detección mientras el lote se está recogiendo.
+  if (busy || store.job.phase !== 'collecting') return ctx.reply(`Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`);
+  const target = resolveSite(name, cfg.sitesRoot);
+  if (!target.ok) return ctx.reply(notFoundText(name, target));
+  if (target.name === store.job.site) return ctx.reply(`El trabajo abierto ya es de ${target.name}.`);
+  const from = store.job.site;
+  for (const it of store.takePending()) store.addToNextBatch(unmaterialize(it));
+  closeJob();
+  await say(`Cambio el trabajo de ${from} a ${target.name}.`);
+  return openJob(target.name);
 });
 
 bot.command('plan', () => batch.flush());
@@ -163,6 +181,7 @@ async function openJob(name, reason = '') {
   if (!site.ok) return say(notFoundText(name, site));
   const jobDir = makeJobDir(cfg.auditsRoot, site.name);
   store.open({ site: site.name, sitePath: site.path, jobDir, sessionId: randomUUID() });
+  lastPrompt = '';
   await addToJob(store.takeNextBatch());
   if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
 
@@ -183,16 +202,18 @@ async function openJob(name, reason = '') {
 
 function closeJob() {
   batch.cancel();
+  conflict = null;
   store.close();
 }
 
-async function receive(ctx, items, { forwarded }) {
-  const tagged = items.map((it) => ({ ...it, forwarded }));
+async function receive(ctx, items, { forwarded, hosts = [] }) {
+  const tagged = items.map((it) => ({ ...it, forwarded, hosts }));
   const job = store.job;
   if (!job) {
-    // Lote sin sitio: se guarda hasta /nuevo; al cerrarse el lote se pregunta el sitio.
+    // Lote sin sitio: se guarda y, si el mensaje trae URLs, se intenta detectar el sitio del lote.
     for (const it of tagged) store.addToNextBatch(it);
     batch.touch();
+    if (hosts.length) return detectAndOpen(batchHosts());
     return;
   }
   if (forwarded && job.phase === 'reported' && !busy) {
@@ -203,6 +224,21 @@ async function receive(ctx, items, { forwarded }) {
   if (forwarded && (busy || job.phase === 'plan' || job.phase === 'implement')) {
     for (const it of tagged) store.addToNextBatch(it);
     return say('Guardado para el siguiente lote.');
+  }
+  if (forwarded && job.phase === 'collecting') {
+    if (conflict) {
+      // El resto del reenvío en disputa (fotos de un álbum sin URL) espera a la respuesta.
+      for (const it of tagged) store.addToNextBatch(it);
+      return;
+    }
+    const m = hosts.length ? matchSite(hosts, buildIndex()) : { kind: 'none' };
+    if (m.kind === 'one' && m.site !== job.site) {
+      for (const it of tagged) store.addToNextBatch(it);
+      const sid = job.sessionId.slice(0, 8);
+      conflict = { site: m.site, sid };
+      const kb = new InlineKeyboard().text(`Cambiar a ${m.site}`, `switch:${sid}`).text(`Añadir a ${job.site}`, `keep:${sid}`);
+      return say(`Este reenvío es de ${m.site} (${m.host}), pero el trabajo abierto es de ${job.site}.`, { reply_markup: kb });
+    }
   }
   await addToJob(tagged);
   if (!store.job || !store.job.pending.length) return;
@@ -225,6 +261,35 @@ async function processNextBatch() {
     await say(`Nuevo lote de QA. Cierro el trabajo en ${site}.`);
   }
   batch.touch();
+  return detectAndOpen(batchHosts());
+}
+
+function siteKeyboard(sites) {
+  const kb = new InlineKeyboard();
+  for (const s of sites.slice(0, 5)) {
+    if (Buffer.byteLength(`site:${s}`) <= 64) kb.text(s, `site:${s}`).row();
+  }
+  return kb.text('Otro', 'site-other');
+}
+
+// Sin trabajo abierto: un solo sitio abre el trabajo; varios o ninguno, botones. Nunca adivina.
+async function detectAndOpen(hosts) {
+  if (store.job || !hosts.length) return;
+  const index = buildIndex();
+  const m = matchSite(hosts, index);
+  if (m.kind === 'one') return openJob(m.site, `detectado por ${m.host}`);
+  const key = hosts.join(' ');
+  if (key === lastPrompt) return;
+  lastPrompt = key;
+  if (m.kind === 'many') {
+    return say(`El lote menciona varios sitios: ${m.sites.join(', ')}. ¿De cuál es?`, { reply_markup: siteKeyboard(m.sites) });
+  }
+  const candidates = [...new Set(hosts.flatMap((h) => {
+    const r = resolveSite(siteQuery(h), cfg.sitesRoot);
+    return r.ok ? [r.name] : r.suggestions;
+  }))];
+  const ask = candidates.length ? ' ¿Es alguno de estos?' : '';
+  return say(`No tengo ese sitio (${hosts.join(', ')}).${ask}`, { reply_markup: siteKeyboard(candidates) });
 }
 
 async function handleContent(ctx) {
@@ -249,7 +314,8 @@ async function handleContent(ctx) {
     return;
   }
   if (msg.caption) items.push({ type: 'text', text: msg.caption });
-  return receive(ctx, items, { forwarded });
+  const hosts = extractHosts(msg.text ?? msg.caption ?? '', msg.entities ?? msg.caption_entities ?? []);
+  return receive(ctx, items, { forwarded, hosts });
 }
 
 bot.on(['message:text', 'message:photo', 'message:document'], handleContent);
@@ -257,7 +323,10 @@ bot.on(['message:text', 'message:photo', 'message:document'], handleContent);
 // Cierre del lote: por el temporizador, /plan o «eso es todo».
 async function closeBatch() {
   try {
-    if (!store.job && store.nextBatch.length) return await say('¿De qué sitio es? Usa /nuevo <sitio>.');
+    if (conflict) return await say(`Antes de seguir, dime si cambio a ${conflict.site} o lo añado a ${store.job?.site}.`);
+    if (!store.job && store.nextBatch.length) {
+      return await say(batchHosts().length ? 'Elige el sitio en los botones de arriba o usa /nuevo <sitio>.' : '¿De qué sitio es? Usa /nuevo <sitio>.');
+    }
     return await requestPlan();
   } catch (e) {
     console.error('Error cerrando el lote:', redact(e?.stack ?? e));
@@ -292,6 +361,43 @@ bot.callbackQuery(/^dirty:cancel:(.+)$/, async (ctx) => {
   await ctx.editMessageReplyMarkup().catch(() => {});
   if (store.job && !busy) closeJob();
   return say('Trabajo cancelado.');
+});
+
+bot.callbackQuery(/^site:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup().catch(() => {});
+  if (store.job) return say(`Ya hay un trabajo abierto en ${store.job.site}.`);
+  return openJob(ctx.match[1]);
+});
+
+bot.callbackQuery('site-other', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup().catch(() => {});
+  return say('Usa /nuevo <sitio>.');
+});
+
+const conflictIs = (sid) => conflict?.sid === sid && store.job?.sessionId.slice(0, 8) === sid;
+
+bot.callbackQuery(/^switch:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup().catch(() => {});
+  if (!conflictIs(ctx.match[1])) return say('Esa pregunta ya no vale.');
+  const { site } = conflict;
+  const from = store.job.site;
+  closeJob();
+  await say(`Trabajo en ${from} cerrado.`);
+  return openJob(site);
+});
+
+bot.callbackQuery(/^keep:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup().catch(() => {});
+  if (!conflictIs(ctx.match[1])) return say('Esa pregunta ya no vale.');
+  conflict = null;
+  const site = store.job.site;
+  await addToJob(store.takeNextBatch());
+  batch.touch();
+  return say(`Añadido a ${site}.`);
 });
 
 bot.callbackQuery('approve', async (ctx) => {
@@ -460,6 +566,7 @@ if (cfg.ownerId && store.nextBatch.length) {
 if (!store.job && store.nextBatch.length) batch.touch();
 if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
 
+console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 await bot.init();
 run(bot);
 console.log('issue-bot escuchando');
