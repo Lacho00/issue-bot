@@ -26,13 +26,31 @@ Deja los cambios sin commitear en la rama activa. Si el tema tiene build (npm ru
 En cada cambio visual mide antes y después con getComputedStyle y getBoundingClientRect en
 escritorio y móvil, en todos los elementos que compartan la clase. Si no coincide con lo esperado,
 para y pregunta.
-Haz capturas del «Después» en ${jobDir}/img/ con nombres NN-descripcion.png.
-Al terminar escribe ${jobDir}/informe.md en español:
-- Título «QA <fecha>: correcciones», párrafo de contexto (dónde y cómo se probó, estado de git).
-- Tabla resumen: #, Issue, Estado (Corregido / Mitigado / No es de código / Pendiente).
-- Por issue: Antes (captura qa-NN), Causa, Arreglo, Después (captura nueva).
-- Las imágenes van como imágenes Markdown con rutas relativas img/..., por ejemplo ![Antes](img/qa-01.jpg).
-  El bot convierte el Markdown a HTML automáticamente.
+Haz capturas del «Después» en ${jobDir}/img/ con nombres NN-descripcion.png, en escritorio y en
+móvil, recortadas a la zona del issue y con el mismo encuadre que la foto de la QA.
+Si reproduces el fallo en local antes de editar, captúralo también (NN-antes-descripcion.png).
+Al terminar escribe ${jobDir}/informe.json (UTF-8, en español). El bot lo convierte en el informe HTML:
+{
+  "context": "Dónde y cómo se probó, rama y estado de git.",
+  "branch": "<rama activa>",
+  "issues": [
+    {
+      "title": "Título corto",
+      "status": "corregido | mitigado | no-codigo | pendiente",
+      "qa": { "message": "Texto literal del mensaje de la QA", "images": ["img/qa-01.jpg"] },
+      "before": ["img/01-antes-escritorio.png"],
+      "cause": "Causa.",
+      "fix": "Qué cambiaste.",
+      "files": ["ruta/relativa/al/sitio"],
+      "measurements": [{ "element": ".selector", "viewport": "móvil", "property": "color", "before": "rgb(0, 0, 0)", "after": "rgb(255, 255, 255)" }],
+      "after": [{ "src": "img/01-escritorio.png", "label": "Escritorio" }, { "src": "img/01-movil.png", "label": "Móvil" }],
+      "notes": "Opcional."
+    }
+  ]
+}
+- Un issue por cada mensaje de la QA. En "qa" copia su texto tal cual y todas las capturas qa-NN que lo acompañan.
+- "before" solo lleva tus capturas locales del fallo; si no lo reprodujiste, déjalo vacío.
+- Rutas de imagen relativas a la carpeta del trabajo (img/...). Texto plano; se permite \`código\`.
 Termina tu respuesta con un resumen de 3 a 6 líneas.`;
 
 export function systemPrompt({ phase, ...ctx }) {

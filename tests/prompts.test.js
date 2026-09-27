@@ -20,14 +20,16 @@ test('ninguna fase pide leer el CLAUDE.md: se carga solo con --setting-sources',
 test('implement: solo lo aprobado, informe en la carpeta del trabajo', () => {
   const p = systemPrompt({ ...ctx, phase: 'implement' });
   assert.match(p, /solo lo aprobado/i);
-  assert.match(p, /informe\.md/);
+  assert.match(p, /informe\.json/);
   assert.match(p, /qa-2026-09-21/);
   assert.match(p, /sin commitear/i);
 });
 
-test('implement: pide el informe en español', () => {
+test('implement: pide el informe en español con Antes y Después', () => {
   const p = systemPrompt({ ...ctx, phase: 'implement' });
-  assert.match(p, /informe\.md en español/i);
+  assert.match(p, /informe\.json \(UTF-8, en español\)/i);
+  assert.match(p, /"qa": \{ "message"/);
+  assert.match(p, /"after"/);
 });
 
 test('userMessage junta textos y rutas de capturas', () => {

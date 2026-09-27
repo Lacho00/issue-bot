@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport } from '../src/report.js';
+import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, renderQaReport, parseQaReport, qaSummary } from '../src/report.js';
 
 test('embebe imágenes locales y deja las externas', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'rep-'));
@@ -73,4 +73,72 @@ test('renderReport + inlineImages embebe una imagen existente', () => {
   const html = renderReport(md, { title: 'QA' });
   const out = inlineImages(html, dir);
   assert.match(out, /src="data:image\/png;base64,AQID"/);
+});
+
+const REPORT = {
+  site: 'sitio',
+  date: '2026-09-26',
+  context: 'Probado en local, escritorio y móvil. Cambios sin commitear en `main`.',
+  issues: [
+    {
+      title: 'Icono de búsqueda negro',
+      status: 'corregido',
+      qa: { message: 'El icono de la lupa sale negro <b>', images: ['img/qa-01.jpg'] },
+      before: ['img/01-antes-local.png'],
+      cause: 'El reset `btn-reset` pisa `text-white`.',
+      fix: 'Orden de las clases.',
+      files: ['assets/css/main.css'],
+      measurements: [{ element: '.icon-search', property: 'color', before: 'rgb(0, 0, 0)', after: 'rgb(255, 255, 255)' }],
+      after: [{ src: 'img/01-escritorio.png', label: 'Escritorio' }, 'img/01-movil.png'],
+    },
+    { title: 'Texto legal', status: 'no-codigo', qa: { message: 'Falta el aviso', images: [] }, cause: 'Contenido del editor.' },
+  ],
+};
+
+test('renderQaReport pone Antes y Después lado a lado con las fotos de la QA', () => {
+  const out = renderQaReport(REPORT);
+  assert.match(out, /class="ba"/);
+  assert.match(out, /<img src="img\/qa-01\.jpg"/);
+  assert.match(out, /<img src="img\/01-antes-local\.png"/);
+  assert.match(out, /<img src="img\/01-escritorio\.png"[^>]*alt="Escritorio"/);
+  assert.match(out, /<img src="img\/01-movil\.png"/);
+  const card = out.slice(out.indexOf('id="issue-1"'));
+  assert.ok(card.indexOf('qa-01.jpg') < card.indexOf('01-escritorio.png'), 'Antes va antes que Después');
+});
+
+test('renderQaReport escapa el mensaje de la QA y convierte `code`', () => {
+  const out = renderQaReport(REPORT);
+  assert.match(out, /sale negro &lt;b&gt;/);
+  assert.match(out, /<code>btn-reset<\/code>/);
+});
+
+test('renderQaReport cuenta los estados en los KPIs y usa el estilo de wp-audit', () => {
+  const out = renderQaReport(REPORT);
+  assert.match(out, /<div class="kpi big"><b>2<\/b>/);
+  assert.match(out, /chip st-corregido/);
+  assert.match(out, /chip st-no-codigo/);
+  assert.match(out, /--canvas:/);
+  assert.match(out, /prefers-color-scheme:dark/);
+  assert.match(out, /<meta name="viewport"/);
+});
+
+test('renderQaReport sin fotos Después lo indica en vez de dejar la columna vacía', () => {
+  const out = renderQaReport(REPORT);
+  const card = out.slice(out.indexOf('id="issue-2"'));
+  assert.match(card, /Sin captura/);
+});
+
+test('renderQaReport rechaza un src que no es ruta relativa ni data:', () => {
+  const out = renderQaReport({ ...REPORT, issues: [{ title: 'x', status: 'corregido', after: ['javascript:alert(1)'] }] });
+  assert.doesNotMatch(out, /javascript:/);
+});
+
+test('parseQaReport valida la forma mínima', () => {
+  assert.throws(() => parseQaReport('{}'), /issues/);
+  assert.throws(() => parseQaReport('no json'), /JSON/);
+  assert.equal(parseQaReport(JSON.stringify(REPORT)).issues.length, 2);
+});
+
+test('qaSummary da una línea por issue con su estado', () => {
+  assert.equal(qaSummary(REPORT), '1. Icono de búsqueda negro — Corregido\n2. Texto legal — No es de código');
 });
