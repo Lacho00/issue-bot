@@ -73,10 +73,20 @@ Tras actualizar el código: `systemctl --user restart issue-bot`.
 
 Cada turno carga los settings del usuario, del proyecto y locales del sitio
 (`--setting-sources user,project,local`), así que el `CLAUDE.md` del sitio se carga solo, más la
-lista del bot. Los deny del bot ganan a cualquier allow del sitio: nunca `git commit`, `push`,
-`add`, `reset --hard`, `checkout --` ni `clean`; nunca `wp db drop`, `reset` ni `import`; nunca
-instalar Playwright ni sus navegadores. Lo que no cubre ninguna lista se pide con botones
-Permitir/Denegar.
+lista del bot. Como un settings del sitio puede permitir comandos por su cuenta, la política del
+bot la aplica un hook `PreToolUse` (`src/policy-hook.js`) que corre antes que cualquier allow:
+
+- Deniega `git commit`, `push`, `add`, `restore`, `checkout` (salvo `-b`), `reset --hard`,
+  `clean`, `diff --no-index` y `--output`; `wp db drop`, `reset` e `import`; instalar
+  Playwright; `file://`; y tocar el directorio del bot. Tampoco se edita nada bajo `.claude`
+  ni `.git`.
+- Pregunta por Telegram cualquier Bash fuera de la lista del bot o que componga órdenes
+  (`;`, `&&`, `|`, redirecciones, `$(…)`), los cambios en `package.json` o `composer.json`,
+  toda edición en la fase de plan y, al implementar, la que caiga fuera del sitio y de la
+  carpeta del trabajo.
+
+Si los settings del sitio o del usuario tienen `disableAllHooks`, el bot no arranca el turno.
+Lo que no cubre ninguna lista se pide con botones Permitir/Denegar.
 
 ## Grupo
 
