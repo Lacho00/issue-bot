@@ -35,6 +35,11 @@ export function BASH_ALLOW(phase) {
   ];
 }
 
+// Bash corre en el sandbox de Claude Code (bwrap): escribe solo en el sitio y la carpeta del trabajo,
+// sin red, y se aprueba solo. wp necesita el socket de MySQL y chromium el loopback del sitio local:
+// van fuera del sandbox y los gobiernan la lista del bot y el hook.
+export const UNSANDBOXED = ['wp', 'chromium'];
+
 const HOOK_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const HOOK_SCRIPT = fileURLToPath(new URL('./policy-hook.js', import.meta.url));
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -49,7 +54,7 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath, botDir = pa
   // .mcp.json arranca servidores MCP en el siguiente --resume sin pasar por el hook.
   const mcpDenies = ['Edit', 'Write', 'MultiEdit'].map((t) => `${t}(${abs(sitePath)}/.mcp.json)`);
   // El hook corre antes que cualquier allow de los settings del sitio: ahí manda la política del bot.
-  const ctx = Buffer.from(JSON.stringify({ phase, sitePath, jobDir, botDir })).toString('base64');
+  const ctx = Buffer.from(JSON.stringify({ phase, sitePath, jobDir, botDir, sandbox: true })).toString('base64');
   return {
     hooks: {
       PreToolUse: [{
@@ -87,6 +92,23 @@ export function buildSettings({ phase, sitePath, jobDir, botEnvPath, botDir = pa
         ...editDenies,
         ...mcpDenies,
       ],
+    },
+    sandbox: {
+      enabled: true,
+      // Sin bwrap el turno falla en vez de ejecutar Bash sin aislar y aprobado solo.
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      excludedCommands: UNSANDBOXED.map((c) => `${c}:*`),
+      filesystem: {
+        allowWrite: phase === 'plan' ? [] : dirs,
+        denyWrite: [
+          ...(phase === 'plan' ? [sitePath] : []),
+          `${sitePath}/.git`, `${sitePath}/.claude`, `${sitePath}/.mcp.json`, botDir,
+        ],
+        denyRead: [botEnvPath],
+      },
+      network: { allowedDomains: [] },
     },
   };
 }
@@ -139,7 +161,6 @@ export function decidePermission(toolName, input = {}, { botDir } = {}) {
 // --- Hook PreToolUse ------------------------------------------------------------------------
 // Devuelve { decision: 'deny' | 'ask', reason } o null (sigue el flujo normal de permisos).
 
-const COMPOSITION = /[;&|`<>\n\r$]/;
 const WP_RISKY = /\s--(?:exec|require|ssh|http)\b/i;
 const CHROMIUM_FLAGS = new Set([
   '--headless', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
@@ -186,16 +207,86 @@ function chromiumOk(command, ctx) {
   return true;
 }
 
+// Parte un comando en órdenes por ; && || | y saltos de línea. Devuelve null si sustituye, expande
+// variables, abre subshell o redirige (salvo a /dev/null y 2>&1): eso no se puede leer por partes.
+export function splitCommand(command) {
+  const text = command.replace(/(^|\s)(?:[12]?>\s*\/dev\/null|2>&1)(?=\s|$|[;&|])/g, '$1');
+  const segments = [];
+  let cur = '';
+  let quote = null;
+  const push = () => { if (cur.trim()) segments.push(cur.trim()); cur = ''; };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      cur += ch;
+    } else if (quote === '"') {
+      // \" \\ \$ \` escapan dentro de comillas dobles: el corte por comillas dejaría de ser fiable.
+      if (ch === '$' || ch === '`' || (ch === '\\' && '"\\$`'.includes(text[i + 1]))) return null;
+      if (ch === '"') quote = null;
+      cur += ch;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+    } else if ('$`\\()<>{}#'.includes(ch)) {
+      return null;
+    } else if (ch === '&') {
+      if (text[i + 1] !== '&') return null;
+      i++;
+      push();
+    } else if (ch === '|') {
+      if (text[i + 1] === '|') i++;
+      push();
+    } else if (ch === ';' || ch === '\n' || ch === '\r') {
+      push();
+    } else {
+      cur += ch;
+    }
+  }
+  if (quote) return null;
+  push();
+  return segments;
+}
+
+// Filtros que solo leen la entrada estándar: se aprueban encadenados tras wp o chromium, que corren
+// fuera del sandbox. Sin rutas ni banderas que lean ficheros o ejecuten programas: leer ficheros
+// fuera del sandbox se salta su denyRead, y cd cambiaría la carpeta en la que se comprueban las rutas.
+function stdinFilterOk(segment) {
+  const [cmd, ...args] = tokenize(segment);
+  const operands = args.filter((a) => !a.startsWith('-'));
+  if (cmd === 'head' || cmd === 'tail') return args.every((a) => /^-(?:n|c)?\d*$/.test(a) || /^\d+$/.test(a)) && operands.every((a) => /^\d+$/.test(a));
+  if (cmd === 'wc') return args.every((a) => /^-[lwcm]+$/.test(a));
+  if (cmd === 'grep') return args.filter((a) => a.startsWith('-')).every((a) => /^-[EFinvcowx]+$/.test(a)) && operands.length === 1;
+  return false;
+}
+
+const UNSANDBOXED_RE = new RegExp(String.raw`(?:^|[\s;&|(\`])(?:${UNSANDBOXED.join('|')})(?=\s|$)`, 'm');
+
 function bashDecision(command, ctx) {
   const denied = decidePermission('Bash', { command }, ctx);
   if (denied.action === 'deny') return { decision: 'deny', reason: denied.message };
   const cmd = command.trim();
   const ask = (why) => ({ decision: 'ask', reason: `Pide permiso al dueño: ${why}.` });
-  if (COMPOSITION.test(cmd)) return ask('el comando compone varias órdenes, redirige o expande variables');
-  if (!inBotList(cmd, ctx.phase)) return ask('el comando no está en la lista del bot');
-  if (/^wp\s/.test(cmd) && WP_RISKY.test(cmd)) return ask('wp con --exec, --require, --ssh o --http');
-  if (/^chromium\s/.test(cmd) && !chromiumOk(cmd, ctx)) return ask('chromium con banderas o destinos fuera de lo permitido');
-  return null;
+  // Lo que corre en el sandbox no puede salir del sitio ni de la carpeta del trabajo: lo aprueba el sandbox.
+  if (ctx.sandbox && !UNSANDBOXED_RE.test(cmd)) return null;
+  const segments = splitCommand(cmd);
+  if (!segments?.length) return ask('el comando sustituye, expande variables, abre subshell o redirige');
+  if (segments.length > 1 && !inBotList(segments[0], ctx.phase)) return ask('compuesto que no empieza por una orden de la lista del bot');
+  let viaReadOnly = false;
+  for (const seg of segments) {
+    if (inBotList(seg, ctx.phase)) {
+      if (/^wp\s/.test(seg) && WP_RISKY.test(seg)) return ask('wp con --exec, --require, --ssh o --http');
+      if (/^chromium\s/.test(seg) && !chromiumOk(seg, ctx)) return ask('chromium con banderas o destinos fuera de lo permitido');
+    } else if (stdinFilterOk(seg)) {
+      viaReadOnly = true;
+    } else {
+      return ask(`«${tokenize(seg)[0]}» no está en la lista del bot`);
+    }
+  }
+  // Un comando suelto de la lista ya lo aprueban los allow de los settings; lo compuesto o de solo
+  // lectura no tiene regla que lo cubra, así que lo aprueba el hook.
+  if (segments.length === 1 && !viaReadOnly) return null;
+  return { decision: 'allow', reason: 'Órdenes de solo lectura o de la lista del bot.' };
 }
 
 function editDecision(filePath, ctx) {
@@ -240,6 +331,51 @@ export function siteDisablesHooks(sitePath, homeDir = os.homedir()) {
       return false;
     }
   });
+}
+
+// El sandbox lo define solo el bot: cualquier clave sandbox en los settings del sitio, del usuario o
+// gestionados (sockets, red, rutas, exclusiones…) podría abrir lo que el hook da por aislado.
+export function siteWeakensSandbox(sitePath, homeDir = os.homedir(), managedPath = '/etc/claude-code/managed-settings.json') {
+  const files = [
+    path.join(sitePath, '.claude', 'settings.json'),
+    path.join(sitePath, '.claude', 'settings.local.json'),
+    path.join(homeDir, '.claude', 'settings.json'),
+    managedPath,
+  ];
+  return files.some((f) => {
+    try {
+      return JSON.parse(readFileSync(f, 'utf8'))?.sandbox !== undefined;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Clave del botón «Permitir en este trabajo». Bash: el comando base, con su subcomando en git y npm y
+// con los dos siguientes en wp (wp post list). Ediciones: la carpeta. null, sin botón, para órdenes
+// compuestas o ilegibles, para chromium y para wp que ejecuta PHP o SQL: esas se aprueban una a una.
+const WP_NO_GRANT = new Set(['eval', 'eval-file', 'shell', 'db', 'package', 'cli', 'config']);
+
+export function grantKeys(toolName, input = {}) {
+  if (toolName === 'Bash') {
+    const segments = splitCommand((input.command ?? '').trim());
+    if (segments?.length !== 1) return null;
+    const words = tokenize(segments[0]);
+    const base = words[0];
+    if (!base || base.includes('=') || base.includes('/') || base === 'chromium') return null;
+    const sub = words.slice(1).filter((w) => !w.startsWith('-'));
+    if (base === 'wp') {
+      if (WP_RISKY.test(segments[0]) || !sub[0] || WP_NO_GRANT.has(sub[0])) return null;
+      return [`Bash:wp ${sub.slice(0, 2).join(' ')}`];
+    }
+    if (['git', 'npm'].includes(base)) return sub[0] ? [`Bash:${base} ${sub[0]}`] : null;
+    return [`Bash:${base}`];
+  }
+  if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
+    const p = input.file_path ?? input.notebook_path;
+    return p ? [`edit:${path.dirname(path.resolve(p))}`] : null;
+  }
+  return [toolName];
 }
 
 export function describeRequest(toolName, input = {}) {

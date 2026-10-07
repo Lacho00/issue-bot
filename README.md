@@ -103,15 +103,27 @@ bot la aplica un hook `PreToolUse` (`src/policy-hook.js`) que corre antes que cu
   `clean`, `diff --no-index` y `--output`; `wp db drop`, `reset` e `import`; instalar
   Playwright; `file://`; y tocar el directorio del bot. Tampoco se edita nada bajo `.claude`
   ni `.git`, ni el `.mcp.json` del sitio.
-- Pregunta por Telegram cualquier Bash fuera de la lista del bot o que componga órdenes
-  (`;`, `&&`, `|`, redirecciones, `$(…)`); de `npm run` solo pasa sin preguntar `npm run build` exacto.
-  También pregunta los cambios en `package.json`, `composer.json`, `.npmrc`,
+- Bash corre en el sandbox de Claude Code (bwrap, `failIfUnavailable`). Dentro del sandbox no hay
+  red, y solo se escribe en el sitio y en la carpeta del trabajo; en la fase de plan, en ninguno de
+  los dos. Tampoco se escribe en `.git`, `.claude` ni `.mcp.json`, y no se lee el `.env` del bot.
+  Lo que corre ahí se aprueba solo, incluidos los comandos compuestos y los scripts (`magick`, `node`…).
+- `wp` y `chromium` corren fuera del sandbox: necesitan el socket de MySQL y el loopback del sitio
+  local. Pasan por la lista del bot. Si van compuestos, la primera orden tiene que estar en la
+  lista, y cada una de las demás también, o ser un filtro de la entrada estándar sin ficheros
+  (`head`, `tail`, `wc`, `grep <patrón>`).
+  Si hay `$(…)`, variables, subshell o redirecciones (salvo a `/dev/null` y `2>&1`), se pregunta.
+- También pregunta los cambios en `package.json`, `composer.json`, `.npmrc`,
   `*.config.{js,cjs,mjs,ts}` y `wp-cli*.yml`,
   toda edición en la fase de plan y, al implementar, la que caiga fuera del sitio y de la
   carpeta del trabajo.
 
-Si los settings del sitio o del usuario tienen `disableAllHooks`, el bot no arranca el turno.
-Lo que no cubre ninguna lista se pide con botones Permitir/Denegar.
+Si los settings del sitio, del usuario o gestionados tienen `disableAllHooks` o cualquier clave
+`sandbox` (el sandbox lo define solo el bot), el bot no arranca el turno. Lo que no cubre ninguna
+lista se pide con los botones Permitir y Denegar. Debajo va un tercer botón, «Permitir … en este
+trabajo», solo para órdenes sueltas. Recuerda el comando base (con su subcomando en `git` y `npm`,
+y con dos en `wp`: `wp post list`), o la carpeta de la edición, hasta que se cierra el trabajo.
+No aparece para `chromium` ni para `wp eval`, `shell`, `db` o con `--exec`. Las prohibiciones siguen mandando. El
+recuerdo vive en memoria, así que un despliegue o un reinicio lo borra.
 
 ## Grupo
 

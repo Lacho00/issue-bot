@@ -2,13 +2,13 @@
 // Hook PreToolUse de los turnos del bot. Claude Code lo ejecuta antes de cada Bash/Edit/Write/
 // MultiEdit/NotebookEdit, también cuando un settings del sitio ya lo permite. Entrada: JSON del
 // hook por stdin; contexto del trabajo (fase, sitio, carpeta, bot) en base64 como argumento.
-// Salida: hookSpecificOutput.permissionDecision deny | ask, o nada para seguir el flujo normal.
+// Salida: hookSpecificOutput.permissionDecision deny | ask | allow, o nada para seguir el flujo normal.
 // Ante cualquier fallo deniega (exit 2): un hook roto no puede abrir la puerta.
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { hookDecision } from './policy.js';
 
-const RANK = { deny: 2, ask: 1 };
+const RANK = { deny: 3, ask: 2, allow: 1 };
 
 // Resuelve enlaces simbólicos en el ancestro existente más largo de la ruta.
 function realPath(p) {

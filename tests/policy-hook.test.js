@@ -61,3 +61,9 @@ test('hook script: el comando de buildSettings se ejecuta tal cual por la shell'
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'ask');
 });
+
+test('hook script: allow para órdenes compuestas de la lista fuera del sandbox', () => {
+  const r = run({ tool_name: 'Bash', tool_input: { command: 'git log | head -5' } });
+  assert.equal(r.status, 0);
+  assert.equal(decision(r), 'allow');
+});
