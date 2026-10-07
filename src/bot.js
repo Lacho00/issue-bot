@@ -12,7 +12,7 @@ import { authorizeMessage, authorizeCallback, isForwarded } from './auth.js';
 import { resolveSite } from './sites.js';
 import { makeJobDir, localDate } from './jobdir.js';
 import { Store, StateError } from './state.js';
-import { buildSettings, decidePermission, describeRequest, siteDisablesHooks } from './policy.js';
+import { buildSettings, decidePermission, describeRequest, grantKeys, siteDisablesHooks, siteWeakensSandbox } from './policy.js';
 import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
@@ -37,6 +37,8 @@ store.load();
 let busy = false;
 let killCurrent = null;
 const permissions = new Map();
+// Permisos del botón «Permitir en este trabajo». Viven en memoria hasta cerrar el trabajo.
+const grants = new Set();
 // Lote de mensajes: se cierra solo tras cfg.batchIdleMs sin mensajes nuevos (equivale a /plan).
 const batch = createBatchTimer(cfg.batchIdleMs, () => closeBatch());
 const idleText = () => (cfg.batchIdleMs >= 60_000 ? `${Math.round(cfg.batchIdleMs / 60_000)} min` : `${Math.round(cfg.batchIdleMs / 1000)} s`);
@@ -236,6 +238,7 @@ async function openJob(name, reason = '', before = '') {
 
 function closeJob() {
   batch.cancel();
+  grants.clear();
   conflict = null;
   store.close();
 }
@@ -459,13 +462,15 @@ bot.callbackQuery(/^approve(?::.*)?$/, async (ctx) => {
   return runTurn();
 });
 
-bot.callbackQuery(/^perm:(.+):(allow|deny)$/, async (ctx) => {
+bot.callbackQuery(/^perm:(.+):(allow|deny|always)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   const [, id, choice] = ctx.match;
   const p = permissions.get(id);
   if (!p) return;
-  p.resolve(choice === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: 'Denegado por el dueño.' });
-  await ctx.editMessageText(`${p.text}\n→ ${choice === 'allow' ? 'Permitido' : 'Denegado'}`);
+  if (choice === 'always') for (const k of p.keys ?? []) grants.add(k);
+  p.resolve(choice === 'deny' ? { behavior: 'deny', message: 'Denegado por el dueño.' } : { behavior: 'allow' });
+  const outcome = { allow: 'Permitido', deny: 'Denegado', always: `Permitido en este trabajo: ${p.label}` }[choice];
+  await ctx.editMessageText(`${p.text}\n→ ${outcome}`);
 });
 
 // --- Permisos ---------------------------------------------------------------
@@ -474,9 +479,13 @@ async function onPermission({ tool_name, input }) {
   const decision = decidePermission(tool_name, input, { botDir: ROOT });
   if (decision.action === 'deny') return { behavior: 'deny', message: decision.message };
   if (!busy) return { behavior: 'deny', message: 'No hay turno en curso.' };
+  const keys = grantKeys(tool_name, input);
+  if (keys?.every((k) => grants.has(k))) return { behavior: 'allow' };
   const id = randomUUID().slice(0, 8);
   const text = `Permiso: ${describeRequest(tool_name, input)}`;
+  const label = keys ? keys[0].replace(/^(?:Bash|edit):/, '') : '';
   const kb = new InlineKeyboard().text('Permitir', `perm:${id}:allow`).text('Denegar', `perm:${id}:deny`);
+  if (keys) kb.row().text(`Permitir «${label}» en este trabajo`, `perm:${id}:always`);
   const msg = await say(text, { reply_markup: kb });
   return new Promise((resolve) => {
     const timer = setTimeout(async () => {
@@ -486,6 +495,8 @@ async function onPermission({ tool_name, input }) {
     }, cfg.permissionTimeoutMs);
     permissions.set(id, {
       text,
+      keys,
+      label,
       resolve: (r) => { clearTimeout(timer); permissions.delete(id); resolve(r); },
     });
   });
@@ -501,6 +512,10 @@ async function runTurn() {
   // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
   if (siteDisablesHooks(job.sitePath)) {
     return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
+  }
+  // El hook da por aislado lo que corre en el sandbox: si un settings lo debilita, no se arranca.
+  if (siteWeakensSandbox(job.sitePath)) {
+    return say(`Los settings de ${job.site} o del usuario definen sandbox; el sandbox lo pone solo el bot: no arranco a Claude. Quítalo y escribe «sigue».`);
   }
   busy = true;
   let restored = false;

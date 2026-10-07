@@ -169,9 +169,47 @@ test('hook: Bash fuera de la lista del bot se pregunta aunque el sitio lo permit
   }
 });
 
-test('hook: composición de shell se pregunta aunque cada parte esté permitida', () => {
-  for (const command of ['git status; git log', 'git status && git log', 'git log || true', 'git log | head', 'git log `x`', 'git log $(x)', 'git log > f.txt', 'git log < f', 'git status\ngit log', 'git log &', 'git log $HOME']) {
+test('hook: sustitución, expansión, subshell o redirección se preguntan', () => {
+  for (const command of ['git log `x`', 'git log $(x)', 'git log > f.txt', 'git log < f', 'git log &', 'git log $HOME', 'echo "$HOME"', 'cat a > b', '(git log)', 'git log "sin cerrar']) {
     assert.equal(decisionOf(bash(command)), 'ask', JSON.stringify(command));
+  }
+});
+
+test('hook: composición de órdenes de la lista con filtros de stdin se aprueba', () => {
+  for (const command of [
+    'git status; git log', 'git status && git log', 'git log | head', 'git status\ngit log',
+    'git log 2>/dev/null | wc -l', 'wp option get blogname | head -1', 'wp post list | grep -n "a\\|b"', 'git log | tail -n 5',
+  ]) {
+    assert.equal(decisionOf(bash(command)), 'allow', JSON.stringify(command));
+  }
+});
+
+test('hook: lo que puede escribir, ejecutar, leer ficheros o cambiar de carpeta se pregunta', () => {
+  for (const command of [
+    'ls | xargs rm', 'git log; rm -rf x', 'git log || true', 'ls -la; cat style.css', 'cd wp-content && git status',
+    'git log | sort --compress-program=./e.sh', 'git log | head /etc/passwd', 'git log | grep -f /etc/shadow',
+    'cd ~ && chromium --headless --screenshot=.bashrc http://s.local', 'cat ~/.aws/credentials | wp option get home',
+    'echo "a\\" " ; rm -rf ~/x ; wp option get home #"', 'git log # x', 'ls | tee f', 'FOO=1 git log',
+  ]) {
+    assert.equal(decisionOf(bash(command)), 'ask', JSON.stringify(command));
+  }
+});
+
+test('hook con sandbox: Bash sin wp ni chromium sigue el flujo normal; los deny se mantienen', () => {
+  const sbx = { ...imp, sandbox: true };
+  for (const command of ['magick a.png -crop 800x600+0+0 b.jpg', 'node medir.mjs', 'ls; cat a | head', 'python3 -c "print(1)"', "cat > a.js <<'EOF'\nx\nEOF", 'echo $(date)']) {
+    assert.equal(bash(command, sbx), null, JSON.stringify(command));
+  }
+  for (const command of ['git push', 'git commit -m x', 'cat /srv/http/bot-sandbox/.env', 'wp db drop --yes']) {
+    assert.equal(decisionOf(bash(command, sbx)), 'deny', command);
+  }
+});
+
+test('hook con sandbox: wp y chromium corren fuera y pasan por la lista', () => {
+  const sbx = { ...imp, sandbox: true };
+  assert.equal(bash('wp option get blogname', sbx), null);
+  for (const command of ['wp eval "x"', 'ls && wp db query "DROP TABLE x"', 'echo $(wp option get x)', 'chromium --headless --renderer-cmd-prefix=/bin/sh https://x/']) {
+    assert.equal(decisionOf(bash(command, sbx)), 'ask', command);
   }
 });
 
@@ -258,7 +296,7 @@ test('settings: hook PreToolUse con la política y deny estáticos de .claude, .
     assert.equal(pre[0].hooks[0].type, 'command');
     assert.match(cmd, /^'\/usr\/bin\/node' '.*\/src\/policy-hook\.js' [A-Za-z0-9+/=]+$/);
     const ctx = JSON.parse(Buffer.from(cmd.split(' ').at(-1), 'base64').toString('utf8'));
-    assert.deepEqual(ctx, { phase, sitePath: '/srv/http/tienda-demo', jobDir: SETTINGS_ARGS.jobDir, botDir: '/srv/http/bot-sandbox' });
+    assert.deepEqual(ctx, { phase, sitePath: '/srv/http/tienda-demo', jobDir: SETTINGS_ARGS.jobDir, botDir: '/srv/http/bot-sandbox', sandbox: true });
     for (const rule of [
       'Edit(//srv/http/tienda-demo/.claude/**)', 'Write(//srv/http/tienda-demo/.claude/**)', 'MultiEdit(//srv/http/tienda-demo/.claude/**)',
       'Edit(//srv/http/tienda-demo/.git/**)', 'Write(//srv/http/tienda-demo/.git/**)', 'MultiEdit(//srv/http/tienda-demo/.git/**)',
@@ -329,4 +367,55 @@ test('settings: sin Bash(npm run build:*) en allow ni en BASH_ALLOW', () => {
   assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
   assert.ok(!s.permissions.allow.includes('Bash(npm run build:*)'));
   assert.ok(!BASH_ALLOW('implement').includes('Bash(npm run build:*)'));
+});
+
+test('settings: sandbox cerrado, sin red, wp y chromium fuera, escritura por fase', async () => {
+  const { UNSANDBOXED } = await import('../src/policy.js');
+  const imp = buildSettings({ ...SETTINGS_ARGS, phase: 'implement' }).sandbox;
+  assert.equal(imp.enabled, true);
+  assert.equal(imp.failIfUnavailable, true);
+  assert.equal(imp.autoAllowBashIfSandboxed, true);
+  assert.equal(imp.allowUnsandboxedCommands, false);
+  assert.deepEqual(imp.excludedCommands, UNSANDBOXED.map((c) => `${c}:*`));
+  assert.deepEqual(imp.network.allowedDomains, []);
+  assert.deepEqual(imp.filesystem.allowWrite, ['/srv/http/tienda-demo', SETTINGS_ARGS.jobDir]);
+  for (const d of ['/srv/http/tienda-demo/.git', '/srv/http/tienda-demo/.claude', '/srv/http/tienda-demo/.mcp.json']) assert.ok(imp.filesystem.denyWrite.includes(d), d);
+  assert.ok(imp.filesystem.denyRead.includes('/srv/http/issue-bot/.env'));
+  const plan = buildSettings({ ...SETTINGS_ARGS, phase: 'plan' }).sandbox;
+  assert.deepEqual(plan.filesystem.allowWrite, []);
+  assert.ok(plan.filesystem.denyWrite.includes('/srv/http/tienda-demo'));
+});
+
+test('siteWeakensSandbox detecta settings que sacan comandos del sandbox o lo apagan', async () => {
+  const { siteWeakensSandbox } = await import('../src/policy.js');
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const site = mkdtempSync(`${tmpdir()}/sbx-`);
+  mkdirSync(`${site}/.claude`);
+  assert.equal(siteWeakensSandbox(site, site, `${site}/no-existe.json`), false);
+  for (const sandbox of [{ enabled: false }, { excludedCommands: ['rm:*'] }, { allowUnsandboxedCommands: true }, { filesystem: { allowWrite: ['/'] } }, { network: { allowedDomains: ['*'] } }]) {
+    writeFileSync(`${site}/.claude/settings.local.json`, JSON.stringify({ sandbox }));
+    assert.equal(siteWeakensSandbox(site, site), true, JSON.stringify(sandbox));
+  }
+  for (const sandbox of [{ enabled: true }, { network: { allowAllUnixSockets: true } }, {}]) {
+    writeFileSync(`${site}/.claude/settings.local.json`, JSON.stringify({ sandbox }));
+    assert.equal(siteWeakensSandbox(site, site), true, JSON.stringify(sandbox));
+  }
+  writeFileSync(`${site}/.claude/settings.local.json`, JSON.stringify({ permissions: {} }));
+  assert.equal(siteWeakensSandbox(site, site, `${site}/no-existe.json`), false);
+  writeFileSync(`${site}/managed.json`, JSON.stringify({ sandbox: { enabled: false } }));
+  assert.equal(siteWeakensSandbox(site, site, `${site}/managed.json`), true);
+});
+
+test('grantKeys: una orden suelta, con subcomando en wp/git/npm; sin botón en lo arriesgado', async () => {
+  const { grantKeys } = await import('../src/policy.js');
+  assert.deepEqual(grantKeys('Bash', { command: 'magick a.png b.jpg' }), ['Bash:magick']);
+  assert.deepEqual(grantKeys('Bash', { command: 'wp post list --format=ids' }), ['Bash:wp post list']);
+  assert.deepEqual(grantKeys('Bash', { command: 'git stash' }), ['Bash:git stash']);
+  assert.deepEqual(grantKeys('Bash', { command: 'npm run dev' }), ['Bash:npm run']);
+  for (const command of ['wp post list | head -3', 'echo $(x)', 'FOO=1 node x', './x.sh', 'chromium --headless https://x/', 'wp eval "1"', 'wp db query "DELETE"', 'wp option get x --exec=1', 'wp']) {
+    assert.equal(grantKeys('Bash', { command }), null, command);
+  }
+  assert.deepEqual(grantKeys('Write', { file_path: '/home/lacho/audits/s/results/q/informe.md' }), ['edit:/home/lacho/audits/s/results/q']);
+  assert.deepEqual(grantKeys('SendMessage', {}), ['SendMessage']);
 });

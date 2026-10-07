@@ -4,7 +4,13 @@ Sitio: ${site} (${sitePath}). Carpeta del trabajo: ${jobDir}. Capturas del dueñ
 Escribe en español, frases cortas, sin tablas decorativas. Telegram no renderiza Markdown complejo:
 usa listas simples y bloques de código cortos.
 Nunca hagas git commit ni git push. Nunca instales Playwright ni navegadores.
-Si necesitas algo del dueño, pregúntalo en texto al final de tu respuesta.`;
+Si necesitas algo del dueño, pregúntalo en texto al final de tu respuesta.
+Cada permiso que no esté cubierto le llega al dueño como un botón en Telegram: evita pedirlos.
+- Para leer y buscar usa Read, Grep y Glob, no cat, grep ni ls por Bash.
+- Para medir o capturar el sitio usa las herramientas mcp__playwright, no scripts de node ni python.
+- Bash corre en un sandbox sin red: solo escribe en el sitio y en la carpeta del trabajo, y lo de
+  dentro se aprueba solo. Para recortar capturas usa magick ahí dentro.
+- wp y chromium corren fuera del sandbox: lánzalos solos, desde la raíz del sitio y sin --path.`;
 
 const PLAN = `
 FASE: PLAN (solo lectura). No edites ni crees archivos.
