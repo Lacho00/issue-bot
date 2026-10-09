@@ -1,15 +1,32 @@
 [Unit]
 Description=Bot de Telegram para issues de sitios
-After=network-online.target
-Wants=network-online.target
+# Sin límite de arranques: un corte de red largo hace fallar getMe en cada arranque, y el bot
+# tiene que volver solo cuando vuelva la red. El freno es el backoff de RestartSteps.
+# (network-online.target no existe en el gestor de usuario: ordenar tras él no hace nada.)
+StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=/srv/http/issue-bot
-ExecStart=/home/lacho/.config/nvm/versions/node/v24.18.0/bin/node src/bot.js
-Environment=PATH=/home/lacho/.local/bin:/home/lacho/.config/nvm/versions/node/v24.18.0/bin:/usr/local/bin:/usr/bin
+ExecStart=/srv/http/issue-bot/bin/start.sh
+Environment=PATH=/usr/local/bin:/usr/bin
 Restart=on-failure
+# Espera entre reintentos: de 10 s a 5 min en 5 pasos.
 RestartSec=10
+RestartSteps=5
+RestartMaxDelaySec=300
+# 1 = fallo de configuración (falta el token, no hay node): reintentar no lo arregla. Un fallo
+# inesperado sale con 70 y sí se reintenta.
 RestartPreventExitStatus=1
+
+# Endurecimiento que funciona en una unidad de usuario sin espacios de nombres. ProtectSystem,
+# ProtectHome y PrivateTmp no se usan: en modo usuario implican PrivateUsers, y claude -p
+# necesita escribir en los sitios de /srv/http (con dueños y grupos reales), en ~/.claude y
+# arrancar bwrap para su sandbox. RestrictSUIDSGID tampoco: su filtro seccomp rompe el montaje
+# de bwrap («Can't open source /: Function not implemented»).
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=default.target

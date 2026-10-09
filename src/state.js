@@ -14,10 +14,25 @@ export class Store {
     this.file = file;
     this.job = null;
     this.nextBatch = [];
+    this.recovered = null;
   }
 
+  // Un state.json ilegible (escritura a medias, edición a mano) no debe impedir el arranque:
+  // se aparta con otro nombre para revisarlo y el bot arranca sin trabajo. `recovered` guarda
+  // la ruta de la copia para avisar al dueño.
   load() {
-    const data = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : {};
+    this.recovered = null;
+    let data = {};
+    if (existsSync(this.file)) {
+      try {
+        data = JSON.parse(readFileSync(this.file, 'utf8'));
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('no es un objeto');
+      } catch {
+        this.recovered = `${this.file}.corrupt-${Date.now()}`;
+        renameSync(this.file, this.recovered);
+        data = {};
+      }
+    }
     this.job = data.job ?? null;
     this.nextBatch = Array.isArray(data.nextBatch) ? data.nextBatch : [];
     return this.job;

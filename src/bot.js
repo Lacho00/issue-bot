@@ -1,14 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, statSync, createWriteStream, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { format } from 'node:util';
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { run } from '@grammyjs/runner';
-import { ROOT, loadConfig, setEnvValue } from './config.js';
-import { splitMessage } from './telegram-util.js';
+import { ROOT, loadConfig, updateEnvFile } from './config.js';
+import { splitMessage, downloadToFile } from './telegram-util.js';
 import { authorizeMessage, authorizeCallback, isForwarded } from './auth.js';
 import { resolveSite } from './sites.js';
 import { makeJobDir, localDate } from './jobdir.js';
@@ -37,10 +35,14 @@ for (const level of ['log', 'info', 'warn', 'error']) {
 }
 // Node escribe los errores no capturados directo en stderr, sin pasar por console: el HttpError
 // de grammY guarda en .error el error original, con la URL y el token.
+// El código 1 queda para los fallos de configuración, que la unidad no reintenta
+// (RestartPreventExitStatus=1). Un fallo inesperado sale con otro código para que systemd
+// vuelva a arrancar el bot.
+const EXIT_CRASH = 70;
 for (const event of ['uncaughtException', 'unhandledRejection']) {
   process.on(event, (err) => {
     console.error(`${event}:`, err);
-    process.exit(1);
+    process.exit(EXIT_CRASH);
   });
 }
 const chat = () => cfg.chatId ?? cfg.ownerId;
@@ -48,6 +50,7 @@ const chat = () => cfg.chatId ?? cfg.ownerId;
 const bot = new Bot(cfg.token);
 const store = new Store(cfg.statePath);
 store.load();
+if (store.recovered) console.error(`state.json ilegible: apartado en ${store.recovered}; arranco sin trabajo`);
 
 let busy = false;
 let killCurrent = null;
@@ -100,8 +103,7 @@ bot.use(async (ctx, next) => {
   if (!msg) return;
   if (msg.migrate_to_chat_id && msg.chat?.id === chat()) {
     cfg.chatId = msg.migrate_to_chat_id;
-    const text = existsSync(cfg.envPath) ? readFileSync(cfg.envPath, 'utf8') : '';
-    writeFileSync(cfg.envPath, setEnvValue(text, 'CHAT_ID', String(cfg.chatId)), { mode: 0o600 });
+    updateEnvFile(cfg.envPath, { CHAT_ID: String(cfg.chatId) });
     console.log(`Grupo migrado a supergrupo. CHAT_ID actualizado: ${cfg.chatId}`);
     return;
   }
@@ -110,9 +112,7 @@ bot.use(async (ctx, next) => {
   if (verdict === 'register') {
     cfg.ownerId = msg.from.id;
     cfg.chatId = msg.chat.id;
-    const text = existsSync(cfg.envPath) ? readFileSync(cfg.envPath, 'utf8') : '';
-    const updated = setEnvValue(setEnvValue(text, 'OWNER_ID', String(cfg.ownerId)), 'CHAT_ID', String(cfg.chatId));
-    writeFileSync(cfg.envPath, updated, { mode: 0o600 });
+    updateEnvFile(cfg.envPath, { OWNER_ID: String(cfg.ownerId), CHAT_ID: String(cfg.chatId) });
     console.log(`OWNER_ID registrado: ${cfg.ownerId}, CHAT_ID: ${cfg.chatId}`);
     await ctx.reply(`Registrado: dueño ${cfg.ownerId}, chat ${cfg.chatId}. Solo atiendo al dueño en este chat.`);
     return;
@@ -179,10 +179,7 @@ async function downloadFile(fileId, fallbackExt) {
   const ext = (path.extname(file.file_path || '').slice(1) || fallbackExt).toLowerCase();
   const name = store.nextImageName(ext);
   const dest = path.join(store.job.jobDir, 'img', name);
-  const res = await fetch(`https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`);
-  if (!res.ok) throw new Error(`descarga ${res.status}`);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
-  return dest;
+  return downloadToFile(`https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`, dest);
 }
 
 // Las capturas viajan como fileId hasta que hay trabajo; se descargan al entrar en él.
@@ -714,6 +711,9 @@ if (existsSync(DEPLOY_NOTICE)) {
   const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
   unlinkSync(DEPLOY_NOTICE);
   if (cfg.ownerId && notice) await say(`Bot actualizado a ${notice}`).catch(() => {});
+}
+if (cfg.ownerId && store.recovered) {
+  await say(`state.json estaba dañado y arranqué sin trabajo. La copia está en ${store.recovered}.`).catch(() => {});
 }
 if (cfg.ownerId && store.job) {
   const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';

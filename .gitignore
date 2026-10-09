@@ -1,5 +1,8 @@
 .env
+# .env.tmp lleva el token; state.json.corrupt-* el trabajo de los clientes.
+.env.*
 state.json
+state.json.*
 bot.sock
 node_modules/
 .codebase-memory/

@@ -42,6 +42,8 @@ start_and_wait() {
 abort() {
   echo "cancelado: $*" >&2
   echo "despliegue de ${TARGET:0:7} cancelado ($*); sigo en $(git log -1 --format='%h %s')" >"$NOTICE"
+  # Si el bot agotó reintentos, systemd rechaza el start sin esto.
+  systemctl --user reset-failed "$SERVICE" 2>/dev/null
   systemctl --user start "$SERVICE"
   exit 1
 }
@@ -56,7 +58,11 @@ fail() {
   fi
   # --keep no pisa cambios sin commitear: si chocaran, falla y el árbol se queda como está.
   if [[ "$(git rev-parse HEAD)" != "$PREV" ]]; then git reset -q --keep "$PREV"; fi
+  # La unidad es un enlace al fichero del clon: tras volver atrás, systemd tiene que releerla.
+  systemctl --user daemon-reload
   echo "despliegue de ${TARGET:0:7} fallido ($*); sigo en $(git log -1 --format='%h %s')" >"$NOTICE"
+  # Si el bot agotó reintentos, systemd rechaza el start sin esto.
+  systemctl --user reset-failed "$SERVICE" 2>/dev/null
   systemctl --user start "$SERVICE"
   exit 1
 }

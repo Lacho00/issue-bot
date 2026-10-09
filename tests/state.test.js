@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Store, StateError } from '../src/state.js';
@@ -155,4 +155,32 @@ test('beginPlanTurn numera los turnos de plan del trabajo', () => {
   assert.equal(st.beginPlanTurn(), 2);
   delete st.job.planTurns; // trabajo guardado por una versión anterior
   assert.equal(st.beginPlanTurn(), 1);
+});
+
+test('un state.json corrupto se aparta y arranca vacío', () => {
+  const f = file();
+  writeFileSync(f, '{"job": {"site": ');
+  const st = new Store(f);
+  assert.equal(st.load(), null);
+  assert.deepEqual(st.nextBatch, []);
+  assert.match(st.recovered, /state\.json\.corrupt-\d+$/);
+  assert.equal(readFileSync(st.recovered, 'utf8'), '{"job": {"site": ');
+  assert.equal(existsSync(f), false);
+});
+
+test('un state.json que no es un objeto también se aparta', () => {
+  const f = file();
+  writeFileSync(f, 'null');
+  const st = new Store(f);
+  assert.equal(st.load(), null);
+  assert.ok(st.recovered);
+});
+
+test('un state.json sano no deja copia apartada', () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ job: null, nextBatch: [{ type: 'text', text: 'x' }] }));
+  const st = new Store(f);
+  st.load();
+  assert.equal(st.recovered, null);
+  assert.equal(st.nextBatch.length, 1);
 });

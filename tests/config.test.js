@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseEnv, setEnvValue, loadConfig } from '../src/config.js';
+import { parseEnv, setEnvValue, loadConfig, updateEnvFile } from '../src/config.js';
 
 test('parseEnv lee claves y valores', () => {
   assert.deepEqual(parseEnv('TELEGRAM_TOKEN=abc:1\nOWNER_ID=\n# nota\n'), {
@@ -77,4 +77,21 @@ test('loadConfig: VHOST_DIR por defecto y configurable', () => {
   assert.equal(loadConfig(envPath).vhostDir, '/etc/httpd/conf/extra');
   writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nVHOST_DIR=/tmp/vhosts-prueba\n');
   assert.equal(loadConfig(envPath).vhostDir, '/tmp/vhosts-prueba');
+});
+
+test('updateEnvFile cambia varias claves, conserva el resto y deja permisos 600', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nOWNER_ID=\n', { mode: 0o644 });
+  updateEnvFile(envPath, { OWNER_ID: '1', CHAT_ID: '-2' });
+  assert.equal(readFileSync(envPath, 'utf8'), 'TELEGRAM_TOKEN=t\nOWNER_ID=1\nCHAT_ID=-2\n');
+  assert.equal(statSync(envPath).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(dir), ['.env']);
+});
+
+test('updateEnvFile crea el fichero si no existe', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  updateEnvFile(envPath, { CHAT_ID: '5' });
+  assert.equal(readFileSync(envPath, 'utf8'), 'CHAT_ID=5\n');
 });
