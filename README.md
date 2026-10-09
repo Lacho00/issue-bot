@@ -42,6 +42,10 @@ que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
    loginctl enable-linger "$USER"   # para que arranque sin sesión abierta
    ```
 
+   La unidad arranca `bin/start.sh`, que usa el node del alias `default` de nvm (o el del
+   `PATH` si no hay nvm). Si el bot cae por un fallo inesperado sale con código 70 y systemd lo
+   vuelve a arrancar; con código 1 (falta el token, no hay node) no lo reintenta.
+
 ## Despliegue
 
 `npm run deploy` (`bin/deploy.sh`) despliega `origin/main` en este clon:

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -18,6 +18,21 @@ export function setEnvValue(text, key, value) {
   if (re.test(text)) return text.replace(re, `${key}=${value}`);
   const base = text.endsWith('\n') || text === '' ? text : `${text}\n`;
   return `${base}${key}=${value}\n`;
+}
+
+// Escribe en un temporal y lo renombra: un corte a mitad nunca deja un .env truncado, que
+// dejaría al bot sin token en el siguiente arranque.
+export function updateEnvFile(envPath, values) {
+  let text = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+  for (const [key, value] of Object.entries(values)) text = setEnvValue(text, key, value);
+  const tmp = `${envPath}.tmp`;
+  try {
+    writeFileSync(tmp, text, { mode: 0o600 });
+    renameSync(tmp, envPath);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 const positiveInt = (v, fallback) => {
