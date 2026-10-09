@@ -85,7 +85,9 @@ hacer push a `main` (ver `CLAUDE.md`). GitHub Actions pasa los tests en cada PR 
   - un reenvío es un lote nuevo de QA: cierra el trabajo y abre otro para el sitio detectado.
 - Los reenvíos que llegan mientras Claude trabaja, o con un plan sin aprobar, se guardan para el
   siguiente lote («Guardado para el siguiente lote»).
-- `/estado`, `/cancelar`, `/cerrar`.
+- `/estado`, `/cancelar`, `/cerrar`. Sin trabajo abierto, `/cerrar` descarta el lote guardado.
+- Al arrancar, el bot solo escribe si hay despliegue nuevo o trabajo abierto. Un lote guardado sin
+  sitio no se anuncia: lo retoman `/plan` o el siguiente mensaje.
 
 Diseño: `docs/superpowers/specs/2026-09-21-telegram-issue-bot-design.md` y
 `docs/superpowers/specs/2026-09-22-qa-forward-flow-design.md`.

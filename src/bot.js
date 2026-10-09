@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
+import { format } from 'node:util';
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { run } from '@grammyjs/runner';
 import { ROOT, loadConfig, setEnvValue } from './config.js';
@@ -28,6 +29,20 @@ if (!cfg.token) {
 }
 
 const redact = (s) => String(s).split(cfg.token).join('<token>');
+// grammY y su runner meten la URL de la API, con el token, en los errores que escriben en
+// consola. El journal no debe guardarlo.
+for (const level of ['log', 'info', 'warn', 'error']) {
+  const write = console[level].bind(console);
+  console[level] = (...args) => write(redact(format(...args)));
+}
+// Node escribe los errores no capturados directo en stderr, sin pasar por console: el HttpError
+// de grammY guarda en .error el error original, con la URL y el token.
+for (const event of ['uncaughtException', 'unhandledRejection']) {
+  process.on(event, (err) => {
+    console.error(`${event}:`, err);
+    process.exit(1);
+  });
+}
 const chat = () => cfg.chatId ?? cfg.ownerId;
 
 const bot = new Bot(cfg.token);
@@ -143,7 +158,13 @@ bot.command('cancelar', (ctx) => {
 });
 
 bot.command('cerrar', async (ctx) => {
-  if (!store.job) return ctx.reply('No hay trabajo abierto.');
+  if (!store.job) {
+    if (busy || !store.nextBatch.length) return ctx.reply('No hay trabajo abierto.');
+    // Sin trabajo, /cerrar descarta el lote sin sitio: si no, se arrastra de un arranque a otro.
+    const dropped = store.takeNextBatch().length;
+    batch.cancel();
+    return ctx.reply(`Descartados ${dropped} elementos sin sitio.`);
+  }
   if (busy) return ctx.reply('Claude está trabajando. Usa /cancelar primero.');
   const site = store.job.site;
   closeJob();
@@ -698,10 +719,9 @@ if (cfg.ownerId && store.job) {
   const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
   await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
 }
-if (cfg.ownerId && store.nextBatch.length) {
-  await say(`Tengo ${store.nextBatch.length} elementos guardados para el siguiente lote.`).catch(() => {});
-}
-if (!store.job && store.nextBatch.length) batch.touch();
+// El lote guardado no se anuncia al arrancar ni rearma el temporizador: sin trabajo abierto,
+// cada arranque del sistema volvería a preguntar por el sitio. /estado lo muestra, y el siguiente
+// mensaje o /plan lo retoma.
 if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.awaitingDirty) batch.touch();
 
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
