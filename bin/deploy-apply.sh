@@ -15,7 +15,7 @@ REPO="$PWD"
 SERVICE=issue-bot
 NOTICE="$REPO/deploy-notice.txt"
 READY="$REPO/bot.ready"
-READY_TIMEOUT=90
+READY_TIMEOUT="${READY_TIMEOUT:-180}"
 cd "$REPO"
 PREV="$(git rev-parse HEAD)"
 SWAPPED=0
