@@ -19,7 +19,7 @@ import { startBridge } from './permission-bridge.js';
 import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, renderQaReport, parseQaReport, qaSummary } from './report.js';
 import { createBatchTimer } from './batch.js';
 import { buildSiteIndex } from './site-index.js';
-import { initWithRetry, sendNotices } from './startup.js';
+import { initWithRetry, isFatalTelegramError, sendNotices } from './startup.js';
 import { extractHosts, matchSite, siteQuery } from './detect.js';
 
 // Node prueba IPv6 e IPv4 a la vez y da 250 ms a cada intento. En esta máquina IPv6 no tiene
@@ -751,7 +751,13 @@ console.log(`Índice de sitios: ${buildIndex().size} hosts`);
 writeFileSync(READY_FILE, `${process.pid}\n`);
 console.log('issue-bot listo; conectando con Telegram');
 void (async () => {
-  if (!(await initWithRetry(() => bot.init(), { shouldStop: () => draining }))) return;
+  try {
+    if (!(await initWithRetry(() => bot.init(), { shouldStop: () => draining, isPermanent: isFatalTelegramError }))) return;
+  } catch (err) {
+    // Token inválido: igual que un fallo de configuración, la unidad no lo reintenta.
+    console.error('getMe rechazado por Telegram, no reintento:', err?.message ?? err);
+    process.exit(1);
+  }
   runner = run(bot);
   console.log('issue-bot escuchando');
 })();

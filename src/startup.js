@@ -16,14 +16,16 @@ export function sendNotices(notices, log = console.error) {
 }
 
 // Reintenta init() con espera creciente hasta que funcione o shouldStop() lo corte.
+// Un error para el que isPermanent(err) es true (token revocado) se relanza: reintentar no lo arregla.
 // Devuelve true si init() llegó a funcionar.
-export async function initWithRetry(init, { sleep, log = console.error, shouldStop = () => false, baseMs = 2000, maxMs = 30000 } = {}) {
+export async function initWithRetry(init, { sleep, log = console.error, shouldStop = () => false, isPermanent = () => false, baseMs = 2000, maxMs = 30000 } = {}) {
   const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   for (let attempt = 0; !shouldStop(); attempt++) {
     try {
       await init();
       return true;
     } catch (err) {
+      if (isPermanent(err)) throw err;
       const delay = Math.min(baseMs * 2 ** attempt, maxMs);
       log(`getMe falló (${err?.message ?? err}); reintento en ${delay / 1000} s`);
       await wait(delay);
@@ -31,3 +33,6 @@ export async function initWithRetry(init, { sleep, log = console.error, shouldSt
   }
   return false;
 }
+
+// Errores de la API que reintentar no arregla: token inválido o revocado (401), bot inexistente (404).
+export const isFatalTelegramError = (err) => err?.error_code === 401 || err?.error_code === 404;

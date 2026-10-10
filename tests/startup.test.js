@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fireAndForget, sendNotices, initWithRetry } from '../src/startup.js';
+import { fireAndForget, sendNotices, initWithRetry, isFatalTelegramError } from '../src/startup.js';
 
 test('fireAndForget no propaga el fallo: lo registra', async () => {
   const logs = [];
@@ -61,4 +61,21 @@ test('initWithRetry para cuando shouldStop lo pide', async () => {
   );
   assert.equal(ok, false);
   assert.equal(calls, 1);
+});
+
+test('initWithRetry relanza un error permanente sin reintentar', async () => {
+  let calls = 0;
+  const err = Object.assign(new Error('Unauthorized'), { error_code: 401 });
+  await assert.rejects(
+    initWithRetry(async () => { calls++; throw err; }, { sleep: async () => {}, log: () => {}, isPermanent: isFatalTelegramError }),
+    /Unauthorized/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('isFatalTelegramError: 401 y 404 sí; red y 429 no', () => {
+  assert.equal(isFatalTelegramError({ error_code: 401 }), true);
+  assert.equal(isFatalTelegramError({ error_code: 404 }), true);
+  assert.equal(isFatalTelegramError({ error_code: 429 }), false);
+  assert.equal(isFatalTelegramError(new Error('ETIMEDOUT')), false);
 });
