@@ -62,8 +62,9 @@ fi
 
 # Se ejecuta una copia: el merge reescribe bin/ mientras bash todavía lee el script.
 cp "$WORK/src/bin/deploy-apply.sh" "$WORK/deploy-apply.sh"
+# READY_TIMEOUT (segundos que deploy-apply.sh espera a bot.ready) llega a la unidad si está definido.
 systemd-run --user --quiet --collect --unit="$SERVICE-deploy" \
-  --setenv=PATH="$PATH" --working-directory="$REPO" \
+  --setenv=PATH="$PATH" ${READY_TIMEOUT:+--setenv=READY_TIMEOUT="$READY_TIMEOUT"} --working-directory="$REPO" \
   "$WORK/deploy-apply.sh" "$TARGET" "$NEW_MODULES"
 if systemctl --user is-active -q "$SERVICE"; then
   echo "deploy: ${TARGET:0:7} en cola; el bot se reinicia al quedar libre y avisa por Telegram"
