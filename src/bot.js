@@ -720,15 +720,21 @@ const RESTART_HINT = {
 const notices = [];
 if (existsSync(DEPLOY_NOTICE)) {
   const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
-  unlinkSync(DEPLOY_NOTICE);
-  if (cfg.ownerId && notice) notices.push({ label: 'Aviso de despliegue', send: () => say(`Bot actualizado a ${notice}`) });
+  // El fichero se borra al enviarse: si un SIGUSR2 corta el arranque antes, el aviso sigue ahí.
+  if (cfg.ownerId && notice) {
+    notices.push({ label: 'Aviso de despliegue', send: async () => { await say(`Bot actualizado a ${notice}`); unlinkSync(DEPLOY_NOTICE); } });
+  } else {
+    unlinkSync(DEPLOY_NOTICE);
+  }
 }
 if (cfg.ownerId && store.recovered) {
   notices.push({ label: 'Aviso de state.json dañado', send: () => say(`state.json estaba dañado y arranqué sin trabajo. La copia está en ${store.recovered}.`) });
 }
 if (cfg.ownerId && store.job) {
-  const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
-  notices.push({ label: 'Aviso de trabajo abierto', send: () => say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`) });
+  // Valores capturados ahora: el aviso puede salir minutos después, con el trabajo ya cambiado.
+  const { site, phase } = store.job;
+  const hint = RESTART_HINT[phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
+  notices.push({ label: 'Aviso de trabajo abierto', send: () => say(`Bot reiniciado. Trabajo abierto en ${site}, fase ${PHASE_LABEL[phase]}. ${hint}`) });
 }
 void sendNotices(notices);
 // El lote guardado no se anuncia al arrancar ni rearma el temporizador: sin trabajo abierto,
