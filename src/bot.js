@@ -680,6 +680,7 @@ async function deliverReport(turnStart) {
 // árbol no cambia mientras corre un turno: sus hooks y su MCP cargan código de aquí.
 const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
 const READY_FILE = path.join(ROOT, 'bot.ready');
+const POLLING_FILE = path.join(ROOT, 'bot.polling');
 let draining = false;
 let inflight = 0;
 let runner = null;
@@ -716,7 +717,7 @@ const RESTART_HINT = {
 };
 
 // Los avisos de arranque salen en segundo plano: con la red saturada tardan minutos y
-// deploy-apply.sh solo espera READY_TIMEOUT a bot.ready.
+// deploy-apply.sh solo espera READY_TIMEOUT a bot.ready (y luego vigila la unidad READY_GRACE s).
 const notices = [];
 if (existsSync(DEPLOY_NOTICE)) {
   const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
@@ -759,5 +760,7 @@ void (async () => {
     process.exit(1);
   }
   runner = run(bot);
+  // Con esto deploy-apply.sh da por terminado el periodo de vigilancia sin agotarlo.
+  writeFileSync(POLLING_FILE, `${process.pid}\n`);
   console.log('issue-bot escuchando');
 })();
