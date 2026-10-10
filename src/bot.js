@@ -19,6 +19,7 @@ import { startBridge } from './permission-bridge.js';
 import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, renderQaReport, parseQaReport, qaSummary } from './report.js';
 import { createBatchTimer } from './batch.js';
 import { buildSiteIndex } from './site-index.js';
+import { initWithRetry, isFatalTelegramError, sendNotices } from './startup.js';
 import { extractHosts, matchSite, siteQuery } from './detect.js';
 
 // Node prueba IPv6 e IPv4 a la vez y da 250 ms a cada intento. En esta máquina IPv6 no tiene
@@ -679,6 +680,7 @@ async function deliverReport(turnStart) {
 // árbol no cambia mientras corre un turno: sus hooks y su MCP cargan código de aquí.
 const DEPLOY_NOTICE = path.join(ROOT, 'deploy-notice.txt');
 const READY_FILE = path.join(ROOT, 'bot.ready');
+const POLLING_FILE = path.join(ROOT, 'bot.polling');
 let draining = false;
 let inflight = 0;
 let runner = null;
@@ -714,26 +716,51 @@ const RESTART_HINT = {
   reported: 'Escribe correcciones o /cerrar.',
 };
 
+// Los avisos de arranque salen en segundo plano: con la red saturada tardan minutos y
+// deploy-apply.sh solo espera READY_TIMEOUT a bot.ready (y luego vigila la unidad READY_GRACE s).
+const notices = [];
 if (existsSync(DEPLOY_NOTICE)) {
   const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
-  unlinkSync(DEPLOY_NOTICE);
-  if (cfg.ownerId && notice) await say(`Bot actualizado a ${notice}`).catch(() => {});
+  // El fichero se borra al enviarse: si un SIGUSR2 corta el arranque antes, el aviso sigue ahí.
+  if (cfg.ownerId && notice) {
+    notices.push({ label: 'Aviso de despliegue', send: async () => { await say(`Bot actualizado a ${notice}`); unlinkSync(DEPLOY_NOTICE); } });
+  } else {
+    unlinkSync(DEPLOY_NOTICE);
+  }
 }
 if (cfg.ownerId && store.recovered) {
-  await say(`state.json estaba dañado y arranqué sin trabajo. La copia está en ${store.recovered}.`).catch(() => {});
+  notices.push({ label: 'Aviso de state.json dañado', send: () => say(`state.json estaba dañado y arranqué sin trabajo. La copia está en ${store.recovered}.`) });
 }
 if (cfg.ownerId && store.job) {
-  const hint = RESTART_HINT[store.job.phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
-  await say(`Bot reiniciado. Trabajo abierto en ${store.job.site}, fase ${PHASE_LABEL[store.job.phase]}. ${hint}`).catch(() => {});
+  // Valores capturados ahora: el aviso puede salir minutos después, con el trabajo ya cambiado.
+  const { site, phase } = store.job;
+  const hint = RESTART_HINT[phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
+  notices.push({ label: 'Aviso de trabajo abierto', send: () => say(`Bot reiniciado. Trabajo abierto en ${site}, fase ${PHASE_LABEL[phase]}. ${hint}`) });
 }
+void sendNotices(notices);
 // El lote guardado no se anuncia al arrancar ni rearma el temporizador: sin trabajo abierto,
 // cada arranque del sistema volvería a preguntar por el sitio. /estado lo muestra, y el siguiente
 // mensaje o /plan lo retoma.
 if (store.job?.phase === 'collecting' && store.job.pending.length && !store.job.awaitingDirty) batch.touch();
 
 console.log(`Índice de sitios: ${buildIndex().size} hosts`);
-await bot.init();
-runner = run(bot);
+// bot.ready dice que el proceso arrancó (puente, estado, manejadores), no que Telegram responda:
+// con el enlace saturado getMe tarda minutos y un despliegue sano se revertiría. Pero grammY
+// necesita botInfo (getMe) para tratar los updates, así que el sondeo empieza cuando getMe
+// funciona, reintentándolo en segundo plano.
 // deploy-apply.sh espera este fichero para dar por bueno el arranque.
 writeFileSync(READY_FILE, `${process.pid}\n`);
-console.log('issue-bot escuchando');
+console.log('issue-bot listo; conectando con Telegram');
+void (async () => {
+  try {
+    if (!(await initWithRetry(() => bot.init(), { shouldStop: () => draining, isPermanent: isFatalTelegramError }))) return;
+  } catch (err) {
+    // Token inválido: igual que un fallo de configuración, la unidad no lo reintenta.
+    console.error('getMe rechazado por Telegram, no reintento:', err?.message ?? err);
+    process.exit(1);
+  }
+  runner = run(bot);
+  // Con esto deploy-apply.sh da por terminado el periodo de vigilancia sin agotarlo.
+  writeFileSync(POLLING_FILE, `${process.pid}\n`);
+  console.log('issue-bot escuchando');
+})();
