@@ -5,9 +5,13 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-export NVM_DIR="${NVM_DIR:-$HOME/.config/nvm}"
+# El NVM_DIR heredado puede apuntar a una carpeta que ya no existe: el gestor de usuario de
+# systemd conserva el entorno importado de una sesión antigua.
+for dir in "${NVM_DIR:-}" "$HOME/.config/nvm" "$HOME/.nvm"; do
+  if [[ -n "$dir" && -s "$dir/nvm.sh" ]]; then export NVM_DIR="$dir"; break; fi
+done
 NODE=""
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+if [[ -s "${NVM_DIR:-}/nvm.sh" ]]; then
   # nvm.sh no tolera nounset.
   set +u
   . "$NVM_DIR/nvm.sh" --no-use
