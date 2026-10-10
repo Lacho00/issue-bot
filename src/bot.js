@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 import path from 'node:path';
 import { format } from 'node:util';
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
@@ -19,6 +20,12 @@ import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, render
 import { createBatchTimer } from './batch.js';
 import { buildSiteIndex } from './site-index.js';
 import { extractHosts, matchSite, siteQuery } from './detect.js';
+
+// Node prueba IPv6 e IPv4 a la vez y da 250 ms a cada intento. En esta máquina IPv6 no tiene
+// ruta y la conexión IPv4 con api.telegram.org tarda 300-450 ms: con el plazo por defecto casi
+// todas las llamadas fallan con ETIMEDOUT y getMe puede tardar minutos en el arranque. 5 s
+// cubren también los ratos en que la red va lenta (se han visto 2 s de RTT).
+net.setDefaultAutoSelectFamilyAttemptTimeout(5000);
 
 const cfg = loadConfig();
 if (!cfg.token) {
