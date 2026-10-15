@@ -152,3 +152,23 @@ test('renderQaReport trata un estado heredado de Object.prototype como otro', ()
   const out = renderQaReport({ issues: [{ title: 'X', status: 'constructor' }] });
   assert.match(out, /chip st-otro/);
 });
+
+test('informe en inglés: etiquetas, lang y estados traducidos', () => {
+  const report = { issues: [{ title: 'Arrows', status: 'corregido', cause: 'c', fix: 'f', files: ['a.php'], measurements: [{ element: '.a', property: 'color', before: '1', after: '2' }], after: [] }, { title: 'B', status: 'no-codigo' }], context: 'ctx' };
+  const out = renderQaReport(report, { site: 'demo', date: '2026-01-01', lang: 'en' });
+  assert.match(out, /<html lang="en">/);
+  for (const w of ['QA report', 'Before', 'After', 'Summary', 'Fixed', 'Not a code issue', 'Cause', 'Fix', 'Files', 'Measurements', 'No screenshot', 'Dark', 'Light']) assert.ok(out.includes(w), w);
+  assert.match(out, /st-corregido/);
+  assert.doesNotMatch(out, /Informe de QA|Antes|Después|Resumen|Corregido|Oscuro/);
+  assert.match(qaSummary(report, { lang: 'en' }), /1\. Arrows — Fixed/);
+  assert.throws(() => parseQaReport('{', { lang: 'en' }), /not valid JSON/);
+  assert.throws(() => parseQaReport('{"issues":[]}', { lang: 'en' }), /at least one issue/);
+  assert.match(renderReport('# x', { lang: 'en' }), /<html lang="en">[\s\S]*Report/);
+});
+
+test('informe: el español es el valor por defecto', () => {
+  const out = renderQaReport({ issues: [{ title: 'A', status: 'corregido' }] }, { site: 's', date: 'd' });
+  assert.match(out, /<html lang="es">/);
+  assert.match(out, /Informe de QA/);
+  assert.match(out, /Corregidos/);
+});

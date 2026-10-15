@@ -40,3 +40,40 @@ test('userMessage junta textos y rutas de capturas', () => {
   assert.match(m, /1\. flechas pixeladas/);
   assert.match(m, /\/x\/img\/qa-01\.jpg/);
 });
+
+test('inglés: instrucciones en inglés, mismas claves JSON y mismos status', () => {
+  const es = systemPrompt({ ...ctx, phase: 'implement' });
+  const en = systemPrompt({ ...ctx, phase: 'implement', lang: 'en' });
+  assert.match(en, /Write in English/);
+  assert.match(en, /only what was approved/i);
+  assert.match(en, /informe\.json \(UTF-8, in English\)/);
+  assert.match(en, /corregido \| mitigado \| no-codigo \| pendiente/);
+  assert.match(en, /"corregido" = fixed/);
+  const keys = (p) => [...p.matchAll(/"(\w+)":/g)].map((m) => m[1]).filter((k) => k !== 'status').sort();
+  for (const k of ['context', 'branch', 'issues', 'title', 'qa', 'message', 'images', 'before', 'cause', 'fix', 'files', 'measurements', 'after', 'notes', 'element', 'viewport', 'property', 'src', 'label']) {
+    assert.ok(en.includes(`"${k}":`), k);
+  }
+  assert.deepEqual([...new Set(keys(en))], [...new Set(keys(es))]);
+  assert.doesNotMatch(en, /Escribe en español|solo lo aprobado|Nunca hagas/i);
+  assert.match(en, /chromium/);
+});
+
+test('inglés: fase de plan', () => {
+  const p = systemPrompt({ ...ctx, phase: 'plan', lang: 'en', browser: 'google-chrome' });
+  assert.match(p, /read-only/i);
+  assert.match(p, /Cause:/);
+  assert.match(p, /getComputedStyle/);
+  assert.match(p, /google-chrome/);
+  assert.match(p, /if available/);
+  assert.doesNotMatch(p, /Escribe en español|solo lectura|Causa:/i);
+});
+
+test('el grafo codebase-memory es condicional en ambos idiomas', () => {
+  assert.match(systemPrompt({ ...ctx, phase: 'plan' }), /si está disponible/);
+});
+
+test('userMessage: marcador de captura por idioma', () => {
+  const items = [{ type: 'image', path: '/x/a.jpg' }];
+  assert.equal(userMessage(items), '[Captura: /x/a.jpg]');
+  assert.equal(userMessage(items, { lang: 'en' }), '[Screenshot: /x/a.jpg]');
+});

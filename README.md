@@ -2,6 +2,8 @@
 
 English · [Español](README.es.md)
 
+**New here? Read the [step-by-step guide](docs/GUIDE.md)** (also in [Spanish](docs/GUIDE.es.md)).
+
 A Telegram bot that takes QA issues for a local WordPress site, agrees a fix plan over chat,
 applies the fix with Claude Code and sends back an HTML before/after report.
 
@@ -26,14 +28,19 @@ screenshot next to Claude's.
 5. **Follow up.** Anything you type afterwards is a correction and starts a new round of the same
    job. A new forward is a new QA batch.
 
-Commands: `/nuevo <site>`, `/plan`, `/estado`, `/cancelar`, `/cerrar`. The bot speaks Spanish.
+Commands: `/new <site>`, `/plan`, `/status`, `/cancel`, `/close`. The Spanish names `/nuevo`,
+`/estado`, `/cancelar` and `/cerrar` work too. Typing `that's all` (or `eso es todo`) closes the
+batch. `BOT_LANG` sets the language of the bot, of Claude's replies and of the report (`es` by
+default, `en` for English). The button names in this README are the English ones; in Spanish mode
+they read **Aprobar plan**, **Permitir** and **Denegar**.
 
 ## Requirements
 
 - Node.js 22 or later.
 - `claude` (Claude Code) installed and logged in (`claude login`) for the user that runs the bot.
   The bot runs it headless for each turn.
-- Linux with systemd for the service, and `bwrap` for the Claude Code sandbox.
+- Linux with systemd user services, and `bwrap` for the Claude Code sandbox.
+- WP-CLI (`wp`), Chromium and ImageMagick (`magick`). Playwright MCP is recommended.
 - Sites under one folder (`/srv/http` by default), served locally.
 
 ## Install
@@ -50,27 +57,33 @@ Commands: `/nuevo <site>`, `/plan`, `/estado`, `/cancelar`, `/cerrar`. The bot s
    Optional keys and their defaults:
 
    ```
+   BOT_LANG=es
    SITES_ROOT=/srv/http
    AUDITS_ROOT=~/audits
    CLAUDE_BIN=claude
+   CHROMIUM_BIN=chromium
    BOT_SOCKET=<bot folder>/bot.sock
    BATCH_IDLE_MS=120000
    VHOST_DIR=/etc/httpd/conf/extra
    ```
 
-   `AUDITS_ROOT` is where each job's folder and report go. `VHOST_DIR` holds the Apache vhosts
+   `BOT_LANG` is `es` or `en`. `CHROMIUM_BIN` must be `chromium`, `chromium-browser`,
+   `google-chrome` or `google-chrome-stable`, or the bot exits at startup (Ubuntu's snap package
+   is `chromium-browser`). `AUDITS_ROOT` is where each job's folder and report go. `VHOST_DIR` holds the Apache vhosts
    (`httpd-*.conf`) used to detect the site.
 
-3. Message the bot privately. The first message registers your user ID as `OWNER_ID`.
-4. Install the service:
+3. Install and start the service:
 
    ```
-   mkdir -p ~/.config/systemd/user
-   ln -sf "$PWD"/systemd/issue-bot.service ~/.config/systemd/user/
-   systemctl --user daemon-reload
-   systemctl --user enable --now issue-bot
+   bin/install-service.sh
    loginctl enable-linger "$USER"   # start without an open session
    ```
+
+   The script writes `~/.config/systemd/user/issue-bot.service` from `systemd/issue-bot.service.in`
+   with the real path of the clone, reloads systemd and runs `enable --now`. `--no-start` only
+   writes the unit. Run it again if you move the clone.
+
+4. Message the bot privately. The first message registers your user ID as `OWNER_ID`.
 
    The unit runs `bin/start.sh`, which uses nvm's `default` node, or the one on `PATH`. An
    unexpected crash exits with code 70 and systemd restarts it with backoff. Exit code 1 (missing
@@ -91,8 +104,6 @@ access to that machine.
 - **No commits, no push.** Changes stay in the site's working tree for you to review. The policy
   below denies `git commit`, `push` and destructive commands.
 - **Meant for local copies.** Run it against development sites, not production.
-- The systemd unit and `bin/` scripts assume the clone lives at `/srv/http/issue-bot`. If it lives
-  elsewhere, change `WorkingDirectory` and `ExecStart`.
 
 ## Permission policy
 

@@ -104,3 +104,12 @@ test('loadConfig: AUDITS_ROOT por defecto cuelga del home del usuario', () => {
   writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nAUDITS_ROOT=/tmp/auditorias\n');
   assert.equal(loadConfig(envPath).auditsRoot, '/tmp/auditorias');
 });
+
+test('loadConfig: CHROMIUM_BIN por defecto es chromium', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\n');
+  assert.equal(loadConfig(envPath).chromiumBin, 'chromium');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nCHROMIUM_BIN=chromium-browser\n');
+  assert.equal(loadConfig(envPath).chromiumBin, 'chromium-browser');
+});
