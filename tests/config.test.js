@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import path from 'node:path';
 import { parseEnv, setEnvValue, loadConfig, updateEnvFile } from '../src/config.js';
 
@@ -94,4 +94,13 @@ test('updateEnvFile crea el fichero si no existe', () => {
   const envPath = path.join(dir, '.env');
   updateEnvFile(envPath, { CHAT_ID: '5' });
   assert.equal(readFileSync(envPath, 'utf8'), 'CHAT_ID=5\n');
+});
+
+test('loadConfig: AUDITS_ROOT por defecto cuelga del home del usuario', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfg-'));
+  const envPath = path.join(dir, '.env');
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\n');
+  assert.equal(loadConfig(envPath).auditsRoot, path.join(homedir(), 'audits'));
+  writeFileSync(envPath, 'TELEGRAM_TOKEN=t\nAUDITS_ROOT=/tmp/auditorias\n');
+  assert.equal(loadConfig(envPath).auditsRoot, '/tmp/auditorias');
 });

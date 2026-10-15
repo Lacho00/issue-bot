@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,7 +50,7 @@ export function loadConfig(envPath = path.join(ROOT, '.env')) {
     chatId: env.CHAT_ID ? Number(env.CHAT_ID) : null,
     sitesRoot: env.SITES_ROOT || '/srv/http',
     vhostDir: env.VHOST_DIR || '/etc/httpd/conf/extra',
-    auditsRoot: env.AUDITS_ROOT || '/home/lacho/audits',
+    auditsRoot: env.AUDITS_ROOT || path.join(os.homedir(), 'audits'),
     claudeBin: env.CLAUDE_BIN || 'claude',
     statePath: path.join(ROOT, 'state.json'),
     socketPath: env.BOT_SOCKET || path.join(ROOT, 'bot.sock'),

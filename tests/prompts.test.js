@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { systemPrompt, userMessage } from '../src/prompts.js';
 
-const ctx = { site: 'tienda-demo', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21' };
+const ctx = { site: 'tienda-demo', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21' };
 
 test('plan: solo lectura, formato de plan y valores medidos', () => {
   const p = systemPrompt({ ...ctx, phase: 'plan' });
