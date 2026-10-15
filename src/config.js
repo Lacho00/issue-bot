@@ -61,5 +61,7 @@ export function loadConfig(envPath = path.join(ROOT, '.env')) {
     permissionTimeoutMs: 30 * 60 * 1000,
     contextWarnTokens: 200_000,
     batchIdleMs: positiveInt(env.BATCH_IDLE_MS, 120_000),
+    // Idioma de los textos del dueño: es (por defecto) o en. bot.js rechaza cualquier otro valor.
+    lang: env.BOT_LANG || 'es',
   };
 }

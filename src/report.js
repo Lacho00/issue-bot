@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
+import { createT } from './i18n.js';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml' };
 const IMG = /(<img\b[^>]*?\bsrc=")([^"]+)(")/gi;
@@ -140,9 +141,9 @@ footer.wrap{color:var(--muted);font-size:12.5px;padding-bottom:36px}
   h2{break-after:avoid} tr,figure{break-inside:avoid}
 }`;
 
-function page({ title, headerHtml, tocHtml = '', mainHtml, footer }) {
+function page({ title, headerHtml, tocHtml = '', mainHtml, footer, t }) {
   return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${t('report.lang')}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -154,7 +155,7 @@ function page({ title, headerHtml, tocHtml = '', mainHtml, footer }) {
 <input type="checkbox" id="theme" class="sr">
 <header class="top"><div class="wrap">${headerHtml}</div></header>
 <nav class="toc"><div class="wrap">${tocHtml}
-<label class="theme" for="theme"><span class="to-dark">🌙 Oscuro</span><span class="to-light">☀️ Claro</span></label></div></nav>
+<label class="theme" for="theme"><span class="to-dark">${t('report.dark')}</span><span class="to-light">${t('report.light')}</span></label></div></nav>
 <main class="wrap">
 ${mainHtml}
 </main>
@@ -165,11 +166,13 @@ ${mainHtml}
 }
 
 // Informe libre en Markdown: respaldo cuando Claude no deja informe.json.
-export function renderReport(md, { title } = {}) {
-  const t = title ?? 'Informe';
+export function renderReport(md, { title, lang = 'es' } = {}) {
+  const tr = createT(lang);
+  const t = title ?? tr('report.defaultTitle');
   return page({
+    t: tr,
     title: t,
-    headerHtml: `<p class="kicker">Informe de QA</p>\n<h1>${escapeHtml(t)}</h1>`,
+    headerHtml: `<p class="kicker">${tr('report.kicker')}</p>\n<h1>${escapeHtml(t)}</h1>`,
     mainHtml: `<section>\n${wrapTables(marked.parse(md ?? ''))}\n</section>`,
   });
 }
@@ -184,28 +187,33 @@ export const STATUSES = {
 };
 
 const statusKey = (s) => (Object.hasOwn(STATUSES, String(s ?? '').toLowerCase()) ? String(s).toLowerCase() : 'otro');
-const statusLabel = (s) => STATUSES[statusKey(s)]?.label ?? String(s ?? '—');
+const statusLabel = (s, t = createT('es')) => {
+  const k = statusKey(s);
+  return k === 'otro' ? String(s ?? '—') : t(`status.${k}`);
+};
 
-export function parseQaReport(text) {
+export function parseQaReport(text, { lang = 'es' } = {}) {
+  const t = createT(lang);
   let data;
   try {
     data = JSON.parse(text);
   } catch (err) {
-    throw new Error(`informe.json no es JSON válido: ${err.message}`);
+    throw new Error(t('report.errInvalidJson', { error: err.message }));
   }
   if (!data || !Array.isArray(data.issues) || data.issues.length === 0) {
-    throw new Error('informe.json necesita "issues" con al menos un issue');
+    throw new Error(t('report.errNoIssues'));
   }
   data.issues.forEach((issue, i) => {
     if (!issue || typeof issue.title !== 'string' || !issue.title.trim()) {
-      throw new Error(`informe.json: al issue ${i + 1} le falta "title"`);
+      throw new Error(t('report.errNoTitle', { n: i + 1 }));
     }
   });
   return data;
 }
 
-export function qaSummary(report) {
-  return report.issues.map((issue, i) => `${i + 1}. ${issue.title} — ${statusLabel(issue.status)}`).join('\n');
+export function qaSummary(report, { lang = 'es' } = {}) {
+  const t = createT(lang);
+  return report.issues.map((issue, i) => `${i + 1}. ${issue.title} — ${statusLabel(issue.status, t)}`).join('\n');
 }
 
 // Texto de Claude o de la QA: se escapa todo y solo se interpretan `código` y saltos de línea.
@@ -221,11 +229,11 @@ function text(value) {
 // Solo rutas relativas (img/...) o data:image; cualquier otro esquema se descarta.
 const safeSrc = (src) => typeof src === 'string' && (/^data:image\//i.test(src) || (!/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith('//')));
 
-function figures(list, fallbackLabel) {
+function figures(list, fallbackLabel, t) {
   const shots = (Array.isArray(list) ? list : [])
     .map((item) => (typeof item === 'string' ? { src: item } : item))
     .filter((item) => item && safeSrc(item.src));
-  if (!shots.length) return '<p class="empty">Sin captura</p>';
+  if (!shots.length) return `<p class="empty">${t('report.noShot')}</p>`;
   return shots
     .map((shot, i) => {
       const alt = shot.label || `${fallbackLabel} ${i + 1}`;
@@ -235,17 +243,17 @@ function figures(list, fallbackLabel) {
     .join('');
 }
 
-function issueCard(issue, i) {
+function issueCard(issue, i, t) {
   const n = i + 1;
   const key = statusKey(issue.status);
   const qa = issue.qa ?? {};
   const before = [...(Array.isArray(qa.images) ? qa.images : []), ...(Array.isArray(issue.before) ? issue.before : [])];
   const files = Array.isArray(issue.files) && issue.files.length
-    ? `<h3>Archivos</h3><ul class="files">${issue.files.map((f) => `<li><code>${escapeHtml(f)}</code></li>`).join('')}</ul>`
+    ? `<h3>${t('report.files')}</h3><ul class="files">${issue.files.map((f) => `<li><code>${escapeHtml(f)}</code></li>`).join('')}</ul>`
     : '';
   const rows = (Array.isArray(issue.measurements) ? issue.measurements : []).filter((m) => m && typeof m === 'object');
   const measurements = rows.length
-    ? `<h3>Medidas</h3><div class="scroll"><table><thead><tr><th>Elemento</th><th>Propiedad</th><th>Antes</th><th>Después</th></tr></thead><tbody>${rows
+    ? `<h3>${t('report.measurements')}</h3><div class="scroll"><table><thead><tr><th>${t('report.element')}</th><th>${t('report.property')}</th><th>${t('report.before')}</th><th>${t('report.after')}</th></tr></thead><tbody>${rows
         .map(
           (m) =>
             `<tr><td><code>${escapeHtml(m.element ?? '')}</code>${m.viewport ? ` <span class="muted">${escapeHtml(m.viewport)}</span>` : ''}</td><td>${escapeHtml(
@@ -256,21 +264,22 @@ function issueCard(issue, i) {
     : '';
   const block = (label, value) => (value ? `<h3>${label}</h3>${text(value)}` : '');
   return `<section id="issue-${n}">
-<h2><span class="num-badge">${n}</span><span class="h-title">${escapeHtml(issue.title)}</span> <span class="chip st-${key}">${escapeHtml(statusLabel(issue.status))}</span></h2>
-${qa.message ? `<div class="qa"><p class="kicker">Reporte de la QA</p>${text(qa.message)}</div>` : ''}
+<h2><span class="num-badge">${n}</span><span class="h-title">${escapeHtml(issue.title)}</span> <span class="chip st-${key}">${escapeHtml(statusLabel(issue.status, t))}</span></h2>
+${qa.message ? `<div class="qa"><p class="kicker">${t('report.qaReport')}</p>${text(qa.message)}</div>` : ''}
 <div class="ba">
-<div class="before"><p class="label">Antes</p>${figures(before, 'Antes')}</div>
-<div class="after"><p class="label">Después</p>${figures(issue.after, 'Después')}</div>
+<div class="before"><p class="label">${t('report.before')}</p>${figures(before, t('report.before'), t)}</div>
+<div class="after"><p class="label">${t('report.after')}</p>${figures(issue.after, t('report.after'), t)}</div>
 </div>
-${block('Causa', issue.cause)}
-${block('Arreglo', issue.fix)}
+${block(t('report.cause'), issue.cause)}
+${block(t('report.fix'), issue.fix)}
 ${files}
 ${measurements}
-${block('Notas', issue.notes)}
+${block(t('report.notes'), issue.notes)}
 </section>`;
 }
 
-export function renderQaReport(report, { site, date } = {}) {
+export function renderQaReport(report, { site, date, lang = 'es' } = {}) {
+  const t = createT(lang);
   const s = report.site ?? site ?? '';
   const d = report.date ?? date ?? '';
   const title = report.title ?? `QA ${[s, d].filter(Boolean).join(' ')}`;
@@ -278,16 +287,16 @@ export function renderQaReport(report, { site, date } = {}) {
   const count = (k) => issues.filter((issue) => statusKey(issue.status) === k).length;
   const kpi = (k) => {
     const n = count(k);
-    return `<div class="kpi"><b class="${n ? STATUSES[k].tone : 'na'}">${n}</b><span>${escapeHtml(STATUSES[k].plural)}</span></div>`;
+    return `<div class="kpi"><b class="${n ? STATUSES[k].tone : 'na'}">${n}</b><span>${escapeHtml(t(`statusPlural.${k}`))}</span></div>`;
   };
-  const header = `<p class="kicker">Informe de QA</p>
+  const header = `<p class="kicker">${t('report.kicker')}</p>
 <h1>${escapeHtml(s || title)}</h1>
 <p class="meta">${escapeHtml([d, report.branch].filter(Boolean).join(' · '))}</p>
 <div class="kpis">
-<div class="kpi big"><b>${issues.length}</b><span>${issues.length === 1 ? 'issue' : 'issues'}</span></div>
+<div class="kpi big"><b>${issues.length}</b><span>${issues.length === 1 ? t('report.issue') : t('report.issues')}</span></div>
 ${Object.keys(STATUSES).map(kpi).join('\n')}
 </div>`;
-  const toc = [['resumen', 'Resumen'], ...issues.map((issue, i) => [`issue-${i + 1}`, `${i + 1}. ${issue.title}`])]
+  const toc = [['resumen', t('report.summary')], ...issues.map((issue, i) => [`issue-${i + 1}`, `${i + 1}. ${issue.title}`])]
     .map(([id, label]) => `<a href="#${id}">${escapeHtml(label.length > 40 ? `${label.slice(0, 39)}…` : label)}</a>`)
     .join('');
   const rows = issues
@@ -295,19 +304,20 @@ ${Object.keys(STATUSES).map(kpi).join('\n')}
       (issue, i) =>
         `<tr><td class="num">${i + 1}</td><td><a href="#issue-${i + 1}">${escapeHtml(issue.title)}</a></td><td class="nowrap"><span class="chip st-${statusKey(
           issue.status,
-        )}">${escapeHtml(statusLabel(issue.status))}</span></td></tr>`,
+        )}">${escapeHtml(statusLabel(issue.status, t))}</span></td></tr>`,
     )
     .join('');
-  const summary = `<section id="resumen"><h2>Resumen</h2>
+  const summary = `<section id="resumen"><h2>${t('report.summary')}</h2>
 ${text(report.context)}
-<div class="scroll"><table><thead><tr><th>#</th><th>Issue</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table></div>
+<div class="scroll"><table><thead><tr><th>#</th><th>${t('report.colIssue')}</th><th>${t('report.colStatus')}</th></tr></thead><tbody>${rows}</tbody></table></div>
 </section>`;
   return page({
     title,
     headerHtml: header,
     tocHtml: toc,
-    mainHtml: `${summary}\n${issues.map(issueCard).join('\n')}`,
-    footer: `Informe de QA · ${[s, d].filter(Boolean).join(' · ')}`,
+    mainHtml: `${summary}\n${issues.map((issue, i) => issueCard(issue, i, t)).join('\n')}`,
+    footer: t('report.footer', { parts: [s, d].filter(Boolean).join(' · ') }),
+    t,
   });
 }
 

@@ -1,6 +1,7 @@
 import { createWriteStream, rmSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { createT } from './i18n.js';
 
 export function splitMessage(text, max = 4096) {
   if (text.length <= max) return [text];
@@ -27,13 +28,14 @@ const retryable = (status) => status === 429 || status >= 500;
 // del cuerpo: sin él, una conexión colgada deja el update parado para siempre. Reintenta los
 // fallos de red, los plazos vencidos, 429 y 5xx; un 4xx no cambia al repetirlo. Si falla, no
 // deja un fichero a medias. Los errores no llevan la URL, que incluye el token.
-export async function downloadToFile(url, dest, { timeoutMs = 60_000, attempts = 3, retryDelayMs = 1000, fetchImpl = fetch } = {}) {
+export async function downloadToFile(url, dest, { timeoutMs = 60_000, attempts = 3, retryDelayMs = 1000, fetchImpl = fetch, lang = 'es' } = {}) {
+  const t = createT(lang);
   let lastError;
   for (let i = 1; i <= attempts; i++) {
     try {
       const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) {
-        lastError = new Error(`descarga ${res.status}`);
+        lastError = new Error(t('download.status', { status: res.status }));
         await res.body?.cancel().catch(() => {});
         if (!retryable(res.status)) break;
       } else {
@@ -41,7 +43,7 @@ export async function downloadToFile(url, dest, { timeoutMs = 60_000, attempts =
         return dest;
       }
     } catch (e) {
-      lastError = new Error(`descarga: ${e.name === 'TimeoutError' ? `sin respuesta en ${timeoutMs / 1000} s` : e.message}`);
+      lastError = new Error(t('download.error', { reason: e.name === 'TimeoutError' ? t('download.timeout', { seconds: timeoutMs / 1000 }) : e.message }));
     }
     rmSync(dest, { force: true });
     if (i < attempts) await sleep(retryDelayMs * i);

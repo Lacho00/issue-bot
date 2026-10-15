@@ -17,7 +17,8 @@ import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
 import { inlineImages, unembeddedRefs, summaryFromMarkdown, renderReport, renderQaReport, parseQaReport, qaSummary } from './report.js';
-import { createBatchTimer } from './batch.js';
+import { createBatchTimer, isBatchClose } from './batch.js';
+import { COMMANDS, LANGS, createT } from './i18n.js';
 import { buildSiteIndex } from './site-index.js';
 import { initWithRetry, isFatalTelegramError, sendNotices } from './startup.js';
 import { extractHosts, matchSite, siteQuery } from './detect.js';
@@ -37,6 +38,11 @@ if (!BROWSERS.includes(cfg.chromiumBin)) {
   console.error(`CHROMIUM_BIN tiene que ser uno de: ${BROWSERS.join(', ')}`);
   process.exit(1);
 }
+if (!LANGS.includes(cfg.lang)) {
+  console.error(`BOT_LANG tiene que ser uno de: ${LANGS.join(', ')}`);
+  process.exit(1);
+}
+const t = createT(cfg.lang);
 
 const redact = (s) => String(s).split(cfg.token).join('<token>');
 // grammY y su runner meten la URL de la API, con el token, en los errores que escriben en
@@ -72,7 +78,7 @@ const grants = new Set();
 // Lote de mensajes: se cierra solo tras cfg.batchIdleMs sin mensajes nuevos (equivale a /plan).
 const batch = createBatchTimer(cfg.batchIdleMs, () => closeBatch());
 const idleText = () => (cfg.batchIdleMs >= 60_000 ? `${Math.round(cfg.batchIdleMs / 60_000)} min` : `${Math.round(cfg.batchIdleMs / 1000)} s`);
-const notFoundText = (name, site) => `No existe ${cfg.sitesRoot}/${name}.${site.suggestions.length ? `\n¿Quizá: ${site.suggestions.join(', ')}?` : ''}`;
+const notFoundText = (name, site) => `${t('notFound', { root: cfg.sitesRoot, name })}${site.suggestions.length ? t('notFoundMaybe', { list: site.suggestions.join(', ') }) : ''}`;
 // Se reconstruye en cada detección: son unos pocos ficheros y así nunca queda viejo.
 const buildIndex = () => buildSiteIndex({ sitesRoot: cfg.sitesRoot, vhostDir: cfg.vhostDir });
 const batchHosts = () => [...new Set(store.nextBatch.flatMap((it) => it.hosts ?? []))];
@@ -81,7 +87,7 @@ const unmaterialize = (it) => (it.type === 'image' && it.fileId ? { ...it, path:
 let conflict = null; // { site, sid } mientras se decide «Cambiar a Y» / «Añadir a X»
 let lastPrompt = ''; // hosts de la última pregunta de sitio, para no repetirla en cada foto de un álbum
 
-const PHASE_LABEL = { collecting: 'recogida', plan: 'plan', implement: 'implementación', reported: 'informe entregado' };
+const phaseLabel = (phase) => t(`phase_${phase}`);
 
 async function say(text, extra = {}) {
   const parts = splitMessage(text);
@@ -126,7 +132,7 @@ bot.use(async (ctx, next) => {
     cfg.chatId = msg.chat.id;
     updateEnvFile(cfg.envPath, { OWNER_ID: String(cfg.ownerId), CHAT_ID: String(cfg.chatId) });
     console.log(`OWNER_ID registrado: ${cfg.ownerId}, CHAT_ID: ${cfg.chatId}`);
-    await ctx.reply(`Registrado: dueño ${cfg.ownerId}, chat ${cfg.chatId}. Solo atiendo al dueño en este chat.`);
+    await ctx.reply(t('registered', { owner: cfg.ownerId, chat: cfg.chatId }));
     return;
   }
   return next();
@@ -137,50 +143,51 @@ bot.use((ctx, next) => (ctx.message && isForwarded(ctx.message) ? handleContent(
 
 // --- Comandos ---------------------------------------------------------------
 
-bot.command('start', (ctx) => ctx.reply('Reenvíame los mensajes de la QA: detecto el sitio por sus URLs. Comandos: /nuevo <sitio>, /plan, /estado, /cancelar, /cerrar'));
+bot.command('start', (ctx) => ctx.reply(t('start')));
 
-bot.command('nuevo', async (ctx) => {
+// Los nombres en español e inglés valen siempre, sea cual sea BOT_LANG.
+bot.command(COMMANDS.new, async (ctx) => {
   const name = ctx.match?.trim();
-  if (!name) return ctx.reply('¿De qué sitio es? Usa /nuevo <sitio>.');
+  if (!name) return ctx.reply(t('askSite'));
   if (!store.job) return openJob(name);
   // /nuevo explícito gana a la detección mientras el lote se está recogiendo.
-  if (busy || store.job.phase !== 'collecting') return ctx.reply(`Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`);
+  if (busy || store.job.phase !== 'collecting') return ctx.reply(t('jobAlreadyOpen', { site: store.job.site }));
   const target = resolveSite(name, cfg.sitesRoot);
   if (!target.ok) return ctx.reply(notFoundText(name, target));
-  if (target.name === store.job.site) return ctx.reply(`El trabajo abierto ya es de ${target.name}.`);
+  if (target.name === store.job.site) return ctx.reply(t('sameSite', { site: target.name }));
   const from = store.job.site;
   for (const it of store.takePending()) store.addToNextBatch(unmaterialize(it));
   closeJob();
-  return openJob(target.name, '', `Cambio el trabajo de ${from} a ${target.name}.`);
+  return openJob(target.name, '', t('switching', { from, to: target.name }));
 });
 
 bot.command('plan', () => batch.flush());
 
-bot.command('estado', (ctx) => {
+bot.command(COMMANDS.status, (ctx) => {
   const j = store.job;
-  const next = store.nextBatch.length ? `\nLote siguiente: ${store.nextBatch.length} elementos` : '';
-  if (!j) return ctx.reply(`No hay trabajo abierto.${next}`);
-  return ctx.reply(`Sitio: ${j.site}\nFase: ${PHASE_LABEL[j.phase]}${busy ? ' (Claude trabajando)' : ''}\nRonda: ${j.round ?? 1}\nPendientes: ${j.pending.length}${next}\nContexto: ${j.contextTokens} tokens\nCarpeta: ${j.jobDir}`);
+  const next = store.nextBatch.length ? t('nextBatch', { n: store.nextBatch.length }) : '';
+  if (!j) return ctx.reply(`${t('noJob')}${next}`);
+  return ctx.reply(t('statusJob', { site: j.site, phase: phaseLabel(j.phase), working: busy ? t('working') : '', round: j.round ?? 1, pending: j.pending.length, next, tokens: j.contextTokens, dir: j.jobDir }));
 });
 
-bot.command('cancelar', (ctx) => {
-  if (!killCurrent) return ctx.reply('No hay ningún turno en curso.');
+bot.command(COMMANDS.cancel, (ctx) => {
+  if (!killCurrent) return ctx.reply(t('noTurn'));
   killCurrent();
-  return ctx.reply('Cortando el turno…');
+  return ctx.reply(t('cancelling'));
 });
 
-bot.command('cerrar', async (ctx) => {
+bot.command(COMMANDS.close, async (ctx) => {
   if (!store.job) {
-    if (busy || !store.nextBatch.length) return ctx.reply('No hay trabajo abierto.');
+    if (busy || !store.nextBatch.length) return ctx.reply(t('noJob'));
     // Sin trabajo, /cerrar descarta el lote sin sitio: si no, se arrastra de un arranque a otro.
     const dropped = store.takeNextBatch().length;
     batch.cancel();
-    return ctx.reply(`Descartados ${dropped} elementos sin sitio.`);
+    return ctx.reply(t('dropped', { n: dropped }));
   }
-  if (busy) return ctx.reply('Claude está trabajando. Usa /cancelar primero.');
+  if (busy) return ctx.reply(t('claudeBusyClose'));
   const site = store.job.site;
   closeJob();
-  await ctx.reply(`Trabajo en ${site} cerrado.`);
+  await ctx.reply(t('jobClosed', { site }));
   return processNextBatch();
 });
 
@@ -191,7 +198,7 @@ async function downloadFile(fileId, fallbackExt) {
   const ext = (path.extname(file.file_path || '').slice(1) || fallbackExt).toLowerCase();
   const name = store.nextImageName(ext);
   const dest = path.join(store.job.jobDir, 'img', name);
-  return downloadToFile(`https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`, dest);
+  return downloadToFile(`https://api.telegram.org/file/bot${cfg.token}/${file.file_path}`, dest, { lang: cfg.lang });
 }
 
 // Las capturas viajan como fileId hasta que hay trabajo; se descargan al entrar en él.
@@ -211,7 +218,7 @@ async function addToJob(items) {
       store.addPending({ ...it, path: await downloadFile(it.fileId, it.ext) });
     } catch (e) {
       store.addToNextBatch(it);
-      await say(`No pude descargar una captura (${redact(e.message)}). La reintento con el siguiente lote.`);
+      await say(t('downloadFailed', { error: redact(e.message) }));
     }
   }
 }
@@ -226,7 +233,7 @@ async function openJob(name, reason = '', before = '') {
     if (before) await say(before);
     return say(notFoundText(name, site));
   }
-  const busyMsg = () => `Ya hay un trabajo abierto en ${store.job.site}. Ciérralo con /cerrar.`;
+  const busyMsg = () => t('jobAlreadyOpen', { site: store.job.site });
   if (store.job) {
     if (before) await say(before);
     return say(busyMsg());
@@ -253,17 +260,17 @@ async function openJob(name, reason = '', before = '') {
   if (store.job?.sessionId !== sessionId) return;
   if (!dirty && store.job.phase === 'collecting' && store.job.pending.length) batch.touch();
 
-  const opened = `Trabajo abierto en ${site.name}${reason ? ` (${reason})` : ''}.`;
+  const opened = reason ? t('openedReason', { site: site.name, reason }) : t('opened', { site: site.name });
   if (dirty) {
     const sid = sessionId.slice(0, 8);
-    const kb = new InlineKeyboard().text('Seguir', `dirty:go:${sid}`).text('Cancelar', `dirty:cancel:${sid}`);
-    return say(`${opened}\nEl repo tiene cambios sin commitear:\n${dirty.slice(0, 3000)}\n¿Sigo?`, { reply_markup: kb });
+    const kb = new InlineKeyboard().text(t('btnGo'), `dirty:go:${sid}`).text(t('btnCancel'), `dirty:cancel:${sid}`);
+    return say(t('dirtyRepo', { opened, dirty: dirty.slice(0, 3000) }), { reply_markup: kb });
   }
   const count = store.job.pending.length;
   const next = count
-    ? `Llevo ${count} elementos. Sigue reenviando; cierro el lote con /plan o tras ${idleText()} sin mensajes.`
-    : 'Mándame los issues y termina con /plan.';
-  return say(`${opened}\nCarpeta: ${jobDir}\n${next}`);
+    ? t('batchProgress', { count, idle: idleText() })
+    : t('sendIssues');
+  return say(t('openedFull', { opened, dir: jobDir, next }));
 }
 
 function closeJob() {
@@ -290,7 +297,7 @@ async function receive(ctx, items, { forwarded, hosts = [] }) {
   }
   if (forwarded && (busy || job.phase === 'plan' || job.phase === 'implement')) {
     for (const it of tagged) store.addToNextBatch(it);
-    return say('Guardado para el siguiente lote.');
+    return say(t('savedForNext'));
   }
   if (forwarded && job.phase === 'collecting') {
     if (conflict) {
@@ -303,8 +310,8 @@ async function receive(ctx, items, { forwarded, hosts = [] }) {
       for (const it of tagged) store.addToNextBatch(it);
       const sid = job.sessionId.slice(0, 8);
       conflict = { site: m.site, sid };
-      const kb = new InlineKeyboard().text(`Cambiar a ${m.site}`, `switch:${sid}`).text(`Añadir a ${job.site}`, `keep:${sid}`);
-      return say(`Este reenvío es de ${m.site} (${m.host}), pero el trabajo abierto es de ${job.site}.`, { reply_markup: kb });
+      const kb = new InlineKeyboard().text(t('btnSwitch', { site: m.site }), `switch:${sid}`).text(t('btnKeep', { site: job.site }), `keep:${sid}`);
+      return say(t('forwardConflict', { other: m.site, host: m.host, site: job.site }), { reply_markup: kb });
     }
   }
   await addToJob(tagged);
@@ -313,7 +320,7 @@ async function receive(ctx, items, { forwarded, hosts = [] }) {
     if (!store.job.awaitingDirty) batch.touch();
     return;
   }
-  if (busy) return ctx.reply('Anotado. Entra en el siguiente turno.');
+  if (busy) return ctx.reply(t('noted'));
   if (store.job.phase === 'reported') store.startPlan();
   return runTurn();
 }
@@ -324,7 +331,7 @@ async function processNextBatch() {
   let before = '';
   if (store.job) {
     if (store.job.phase !== 'reported') return;
-    before = `Nuevo lote de QA. Cierro el trabajo en ${store.job.site}.`;
+    before = t('newBatch', { site: store.job.site });
     closeJob();
   }
   batch.touch();
@@ -336,7 +343,7 @@ function siteKeyboard(sites) {
   for (const s of sites.slice(0, 5)) {
     if (Buffer.byteLength(`site:${s}`) <= 64) kb.text(s, `site:${s}`).row();
   }
-  return kb.text('Otro', 'site-other');
+  return kb.text(t('btnOther'), 'site-other');
 }
 
 // Sin trabajo abierto: un solo sitio abre el trabajo; varios o ninguno, botones. Nunca adivina.
@@ -348,20 +355,20 @@ async function detectAndOpen(hosts, before = '') {
   }
   const index = buildIndex();
   const m = matchSite(hosts, index);
-  if (m.kind === 'one') return openJob(m.site, `detectado por ${m.host}`, before);
+  if (m.kind === 'one') return openJob(m.site, t('detectedBy', { host: m.host }), before);
   if (before) await say(before);
   const key = hosts.join(' ');
   if (key === lastPrompt) return;
   lastPrompt = key;
   if (m.kind === 'many') {
-    return say(`El lote menciona varios sitios: ${m.sites.join(', ')}. ¿De cuál es?`, { reply_markup: siteKeyboard(m.sites) });
+    return say(t('manySites', { sites: m.sites.join(', ') }), { reply_markup: siteKeyboard(m.sites) });
   }
   const candidates = [...new Set(hosts.flatMap((h) => {
     const r = resolveSite(siteQuery(h), cfg.sitesRoot);
     return r.ok ? [r.name] : r.suggestions;
   }))];
-  const ask = candidates.length ? ' ¿Es alguno de estos?' : '';
-  return say(`No tengo ese sitio (${hosts.join(', ')}).${ask}`, { reply_markup: siteKeyboard(candidates) });
+  const ask = candidates.length ? t('askAnyOf') : '';
+  return say(t('noSiteKnown', { hosts: hosts.join(', '), ask }), { reply_markup: siteKeyboard(candidates) });
 }
 
 async function handleContent(ctx) {
@@ -371,16 +378,16 @@ async function handleContent(ctx) {
   if (typeof msg.text === 'string') {
     const text = msg.text;
     if (!forwarded) {
-      if (text.startsWith('/')) return ctx.reply('Comando desconocido. Usa /start para ver la lista.');
+      if (text.startsWith('/')) return ctx.reply(t('unknownCommand'));
       const batchOpen = store.job ? store.job.phase === 'collecting' : store.nextBatch.length > 0;
-      if (batchOpen && /^eso es todo\.?$/i.test(text.trim())) return batch.flush();
+      if (batchOpen && isBatchClose(text)) return batch.flush();
     }
     items = [{ type: 'text', text }];
   } else if (msg.photo) {
     items = [{ type: 'image', fileId: msg.photo.at(-1).file_id, ext: 'jpg' }];
   } else if (msg.document) {
     const mime = msg.document.mime_type ?? '';
-    if (!mime.startsWith('image/')) return ctx.reply('Solo acepto imágenes como archivo.');
+    if (!mime.startsWith('image/')) return ctx.reply(t('onlyImages'));
     items = [{ type: 'image', fileId: msg.document.file_id, ext: mime.split('/')[1].split('+')[0] }];
   } else {
     return;
@@ -395,10 +402,10 @@ bot.on(['message:text', 'message:photo', 'message:document'], handleContent);
 // Cierre del lote: por el temporizador, /plan o «eso es todo».
 async function closeBatch() {
   try {
-    if (conflict) return await say(`Antes de seguir, dime si cambio a ${conflict.site} o lo añado a ${store.job?.site}.`);
-    if (store.job?.awaitingDirty) return await say('Antes de seguir, dime si sigo con el repo con cambios sin commitear (botones de arriba).');
+    if (conflict) return await say(t('conflictPending', { other: conflict.site, site: store.job?.site }));
+    if (store.job?.awaitingDirty) return await say(t('dirtyPending'));
     if (!store.job && store.nextBatch.length) {
-      return await say(batchHosts().length ? 'Elige el sitio en los botones de arriba o usa /nuevo <sitio>.' : '¿De qué sitio es? Usa /nuevo <sitio>.');
+      return await say(batchHosts().length ? t('pickSite') : t('askSite'));
     }
     return await requestPlan();
   } catch (e) {
@@ -411,10 +418,10 @@ async function requestPlan() {
     store.startPlan();
   } catch (e) {
     if (!(e instanceof StateError)) throw e;
-    const msg = { 'no-job': 'No hay trabajo abierto. Usa /nuevo <sitio>.', empty: 'Aún no me has mandado ningún issue.', 'bad-phase': 'El plan ya está en marcha.' };
+    const msg = { 'no-job': t('planNoJob'), empty: t('planEmpty'), 'bad-phase': t('planBadPhase') };
     return say(msg[e.code] ?? e.message);
   }
-  if (busy) return say('Anotado. Entra en el siguiente turno.');
+  if (busy) return say(t('noted'));
   return runTurn();
 }
 
@@ -426,30 +433,30 @@ bot.callbackQuery(/^dirty:go:(.+)$/, async (ctx) => {
   store.setAwaitingDirty(false);
   await ctx.editMessageReplyMarkup().catch(() => {});
   if (store.job?.phase === 'collecting' && store.job.pending.length) batch.touch();
-  return say(`Sigo. Mándame los issues y termina con /plan (o espera ${idleText()} sin mensajes).`);
+  return say(t('goOn', { idle: idleText() }));
 });
 
 bot.callbackQuery(/^dirty:cancel:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1]) return;
-  if (busy) return say('Claude está trabajando: no puedo cancelar el trabajo ahora. Usa /cancelar primero.');
+  if (busy) return say(t('dirtyCancelBusy'));
   await ctx.editMessageReplyMarkup().catch(() => {});
   if (store.job?.sessionId.slice(0, 8) !== ctx.match[1] || busy) return;
   closeJob();
-  return say('Trabajo cancelado.');
+  return say(t('jobCancelled'));
 });
 
 bot.callbackQuery(/^site:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (store.job) return say(`Ya hay un trabajo abierto en ${store.job.site}.`);
+  if (store.job) return say(t('jobAlreadyOpenShort', { site: store.job.site }));
   return openJob(ctx.match[1]);
 });
 
 bot.callbackQuery('site-other', async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageReplyMarkup().catch(() => {});
-  return say('Usa /nuevo <sitio>.');
+  return say(t('useNew'));
 });
 
 const conflictIs = (sid) => conflict?.sid === sid && store.job?.sessionId.slice(0, 8) === sid;
@@ -457,22 +464,22 @@ const conflictIs = (sid) => conflict?.sid === sid && store.job?.sessionId.slice(
 bot.callbackQuery(/^switch:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (!conflictIs(ctx.match[1])) return say('Esa pregunta ya no vale.');
+  if (!conflictIs(ctx.match[1])) return say(t('staleQuestion'));
   const { site } = conflict;
   const from = store.job.site;
   closeJob();
-  return openJob(site, '', `Trabajo en ${from} cerrado.`);
+  return openJob(site, '', t('jobClosed', { site: from }));
 });
 
 bot.callbackQuery(/^keep:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageReplyMarkup().catch(() => {});
-  if (!conflictIs(ctx.match[1])) return say('Esa pregunta ya no vale.');
+  if (!conflictIs(ctx.match[1])) return say(t('staleQuestion'));
   conflict = null;
   const site = store.job.site;
   await addToJob(store.takeNextBatch());
   if (store.job && !store.job.awaitingDirty) batch.touch();
-  return say(`Añadido a ${site}.`);
+  return say(t('addedTo', { site }));
 });
 
 // approve:<sid8>:<ronda>:<turno de plan>. Solo vale el botón del último turno de plan del trabajo.
@@ -481,14 +488,14 @@ const approveData = (job) => `approve:${job.sessionId.slice(0, 8)}:${job.round ?
 bot.callbackQuery(/^approve(?::.*)?$/, async (ctx) => {
   const j = store.job;
   if (!j || j.phase !== 'plan' || ctx.callbackQuery.data !== approveData(j)) {
-    await ctx.answerCallbackQuery({ text: 'Ese plan ya no vale.' });
+    await ctx.answerCallbackQuery({ text: t('stalePlan') });
     return ctx.editMessageReplyMarkup().catch(() => {});
   }
   await ctx.answerCallbackQuery();
-  if (busy) return say('Claude sigue trabajando; espera a que termine.');
-  try { store.approve(); } catch { return say('No hay ningún plan pendiente de aprobar.'); }
+  if (busy) return say(t('claudeStillWorking'));
+  try { store.approve(); } catch { return say(t('noPlanPending')); }
   await ctx.editMessageReplyMarkup().catch(() => {});
-  store.addPending({ type: 'text', text: 'Plan aprobado. Implementa lo aprobado y escribe el informe.' });
+  store.addPending({ type: 'text', text: t('planApproved') });
   return runTurn();
 });
 
@@ -498,9 +505,9 @@ bot.callbackQuery(/^perm:(.+):(allow|deny|always)$/, async (ctx) => {
   const p = permissions.get(id);
   if (!p) return;
   if (choice === 'always') for (const k of p.keys ?? []) grants.add(k);
-  p.resolve(choice === 'deny' ? { behavior: 'deny', message: 'Denegado por el dueño.' } : { behavior: 'allow' });
-  const outcome = { allow: 'Permitido', deny: 'Denegado', always: `Permitido en este trabajo: ${p.label}` }[choice];
-  await ctx.editMessageText(`${p.text}\n→ ${outcome}`);
+  p.resolve(choice === 'deny' ? { behavior: 'deny', message: t('permDeniedByOwner') } : { behavior: 'allow' });
+  const outcome = { allow: t('permAllowed'), deny: t('permDenied'), always: t('permAlways', { label: p.label }) }[choice];
+  await ctx.editMessageText(t('permOutcome', { text: p.text, outcome }));
 });
 
 // --- Permisos ---------------------------------------------------------------
@@ -508,20 +515,20 @@ bot.callbackQuery(/^perm:(.+):(allow|deny|always)$/, async (ctx) => {
 async function onPermission({ tool_name, input }) {
   const decision = decidePermission(tool_name, input, { botDir: ROOT });
   if (decision.action === 'deny') return { behavior: 'deny', message: decision.message };
-  if (!busy) return { behavior: 'deny', message: 'No hay turno en curso.' };
+  if (!busy) return { behavior: 'deny', message: t('permNoTurn') };
   const keys = grantKeys(tool_name, input);
   if (keys?.every((k) => grants.has(k))) return { behavior: 'allow' };
   const id = randomUUID().slice(0, 8);
-  const text = `Permiso: ${describeRequest(tool_name, input)}`;
+  const text = t('permText', { request: describeRequest(tool_name, input) });
   const label = keys ? keys[0].replace(/^(?:Bash|edit):/, '') : '';
-  const kb = new InlineKeyboard().text('Permitir', `perm:${id}:allow`).text('Denegar', `perm:${id}:deny`);
-  if (keys) kb.row().text(`Permitir «${label}» en este trabajo`, `perm:${id}:always`);
+  const kb = new InlineKeyboard().text(t('btnAllow'), `perm:${id}:allow`).text(t('btnDeny'), `perm:${id}:deny`);
+  if (keys) kb.row().text(t('btnAlways', { label }), `perm:${id}:always`);
   const msg = await say(text, { reply_markup: kb });
   return new Promise((resolve) => {
     const timer = setTimeout(async () => {
       permissions.delete(id);
-      resolve({ behavior: 'deny', message: 'Sin respuesta del dueño en 30 minutos.' });
-      await bot.api.editMessageText(chat(), msg.message_id, `${text}\n→ Denegado por tiempo`).catch(() => {});
+      resolve({ behavior: 'deny', message: t('permTimeout') });
+      await bot.api.editMessageText(chat(), msg.message_id, t('permOutcome', { text, outcome: t('permTimeoutOutcome') })).catch(() => {});
     }, cfg.permissionTimeoutMs);
     permissions.set(id, {
       text,
@@ -541,17 +548,17 @@ async function runTurn() {
   if (draining) return setImmediate(exitIfIdle);
   // Sin el hook PreToolUse los allow del sitio saltarían la política del bot: no se arranca.
   if (siteDisablesHooks(job.sitePath)) {
-    return say(`Los settings de ${job.site} o del usuario tienen disableAllHooks: sin el hook del bot no arranco a Claude. Quítalo y escribe «sigue».`);
+    return say(t('hooksDisabled', { site: job.site }));
   }
   // El hook da por aislado lo que corre en el sandbox: si un settings lo debilita, no se arranca.
   if (siteWeakensSandbox(job.sitePath)) {
-    return say(`Los settings de ${job.site} o del usuario definen sandbox; el sandbox lo pone solo el bot: no arranco a Claude. Quítalo y escribe «sigue».`);
+    return say(t('sandboxDefined', { site: job.site }));
   }
   busy = true;
   let restored = false;
   try {
     const phase = job.phase === 'implement' ? 'implement' : 'plan';
-    const status = await say(phase === 'plan' ? 'Analizando…' : 'Implementando…');
+    const status = await say(phase === 'plan' ? t('analyzing') : t('implementing'));
     const items = store.takePending();
     if (phase === 'plan') store.beginPlanTurn();
     const turnStart = new Date();
@@ -564,7 +571,7 @@ async function runTurn() {
         sessionId: job.sessionId,
         resume: job.started,
         mode: phase === 'plan' ? 'plan' : 'manual',
-        systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir, browser: cfg.chromiumBin }),
+        systemPrompt: systemPrompt({ phase, lang: cfg.lang, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir, browser: cfg.chromiumBin }),
         settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath, botDir: ROOT, nodeBin: process.execPath }),
         mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
       });
@@ -573,7 +580,7 @@ async function runTurn() {
         bin: cfg.claudeBin,
         cwd: job.sitePath,
         args,
-        prompt: userMessage(items),
+        prompt: userMessage(items, { lang: cfg.lang }),
         timeoutMs: cfg.turnTimeoutMs,
         env: { MCP_TOOL_TIMEOUT: String(cfg.permissionTimeoutMs + 60_000) },
         onEvent: (e) => {
@@ -581,7 +588,7 @@ async function runTurn() {
           const s = statusFromEvent(e);
           if (!s || Date.now() - lastEdit < 4000) return;
           lastEdit = Date.now();
-          bot.api.editMessageText(chat(), status.message_id, `${phase === 'plan' ? 'Analizando' : 'Implementando'}… ${s}`).catch(() => {});
+          bot.api.editMessageText(chat(), status.message_id, t(phase === 'plan' ? 'analyzingLive' : 'implementingLive', { status: s })).catch(() => {});
         },
       });
     } catch (e) {
@@ -589,7 +596,7 @@ async function runTurn() {
       if (store.job?.sessionId === job.sessionId) store.returnPending(items);
       restored = true;
       await bot.api.deleteMessage(chat(), status.message_id).catch(() => {});
-      await say(`No pude lanzar a Claude: ${redact(e.message)}. Escribe «sigue» para reintentar.`).catch(() => {});
+      await say(t('launchFailed', { error: redact(e.message) })).catch(() => {});
       return;
     }
     killCurrent = turn.kill;
@@ -605,24 +612,24 @@ async function runTurn() {
     await bot.api.deleteMessage(chat(), status.message_id).catch(() => {});
 
     try {
-      if (r.timedOut) await say('Turno cortado a los 45 minutos. Escribe «sigue» para retomarlo.');
-      else if (r.killed) await say('Turno cancelado. Escribe «sigue» para retomarlo.');
+      if (r.timedOut) await say(t('turnTimedOut'));
+      else if (r.killed) await say(t('turnKilled'));
       else if (r.isError) {
-        const limit = /limit/i.test(r.text) ? 'Límite de uso alcanzado. ' : '';
-        await say(`${limit}Error de Claude: ${r.text || r.stderr}\nCuando puedas, escribe «sigue».`);
-      } else if (!r.ok) await say(`Claude terminó sin respuesta (código ${r.exitCode}).\n${r.stderr}\nEscribe «sigue» para reintentar.`);
+        const limit = /limit/i.test(r.text) ? t('usageLimit') : '';
+        await say(t('claudeError', { limit, text: r.text || r.stderr }));
+      } else if (!r.ok) await say(t('claudeNoResponse', { code: r.exitCode, stderr: r.stderr }));
       else if (phase === 'plan') {
-        await say(r.text || '(respuesta vacía)', { reply_markup: new InlineKeyboard().text('Aprobar plan', approveData(store.job)) });
+        await say(r.text || t('emptyResponse'), { reply_markup: new InlineKeyboard().text(t('btnApprove'), approveData(store.job)) });
       } else {
-        await say(r.text || 'Implementación terminada.');
+        await say(r.text || t('implDone'));
         await deliverReport(turnStart);
       }
 
       if (store.job && store.job.contextTokens > cfg.contextWarnTokens) {
-        await say(`El contexto va por ${store.job.contextTokens} tokens. Conviene /cerrar y abrir otro trabajo.`);
+        await say(t('contextWarn', { tokens: store.job.contextTokens }));
       }
     } catch (e) {
-      await say(`Error entregando el resultado: ${redact(e.message)}. Escribe «sigue» para reintentar.`).catch(() => {});
+      await say(t('deliverError', { error: redact(e.message) })).catch(() => {});
     }
   } finally {
     busy = false;
@@ -650,31 +657,31 @@ async function deliverReport(turnStart) {
   if (isFresh(jsonPath)) {
     let report;
     try {
-      report = parseQaReport(readFileSync(jsonPath, 'utf8'));
-      htmlSource = renderQaReport(report, { site: job.site, date: localDate() });
-      summary = qaSummary(report);
+      report = parseQaReport(readFileSync(jsonPath, 'utf8'), { lang: cfg.lang });
+      htmlSource = renderQaReport(report, { site: job.site, date: localDate(), lang: cfg.lang });
+      summary = qaSummary(report, { lang: cfg.lang });
     } catch (err) {
-      return say(`${err.message}. Escribe «sigue» para que Claude lo corrija.`);
+      return say(t('fixReport', { error: err.message }));
     }
     writeFileSync(htmlPath, htmlSource);
   } else if (isFresh(htmlPath)) {
     htmlSource = readFileSync(htmlPath, 'utf8');
   } else if (isFresh(mdPath)) {
     const md = readFileSync(mdPath, 'utf8');
-    htmlSource = renderReport(md, { title: `QA ${job.site} ${localDate()}` });
+    htmlSource = renderReport(md, { title: `QA ${job.site} ${localDate()}`, lang: cfg.lang });
     writeFileSync(htmlPath, htmlSource);
   } else {
-    return say(`Claude terminó sin escribir ${jsonPath}. Escribe «sigue» para pedírselo.`);
+    return say(t('noReportWritten', { path: jsonPath }));
   }
 
   const html = inlineImages(htmlSource, job.jobDir);
   const missing = unembeddedRefs(html);
   if (!summary && existsSync(mdPath)) summary = summaryFromMarkdown(readFileSync(mdPath, 'utf8'));
-  await bot.api.sendDocument(chat(), new InputFile(Buffer.from(html), `informe-${job.site}-${localDate()}.html`));
+  await bot.api.sendDocument(chat(), new InputFile(Buffer.from(html), t('reportFile', { site: job.site, date: localDate() })));
   store.finishImplement();
   if (summary) await say(summary);
-  if (missing.length) await say(`Imágenes que no encontré: ${missing.join(', ')}`);
-  return say('Revisa el diff en el repo. Si hay correcciones, escríbelas; si no, /cerrar.');
+  if (missing.length) await say(t('missingImages', { list: missing.join(', ') }));
+  return say(t('reviewDiff'));
 }
 
 // --- Despliegue -------------------------------------------------------------
@@ -713,12 +720,7 @@ bot.catch((err) => console.error('Error del bot:', redact(err.error?.stack ?? er
 
 await startBridge(cfg.socketPath, onPermission);
 
-const RESTART_HINT = {
-  collecting: 'Sigue mandando issues y termina con /plan. O /cerrar.',
-  plan: 'Escribe «sigue» para continuar. O /cerrar.',
-  implement: 'Escribe «sigue» para continuar. O /cerrar.',
-  reported: 'Escribe correcciones o /cerrar.',
-};
+const restartHint = (phase) => t(['collecting', 'plan', 'implement', 'reported'].includes(phase) ? `hint_${phase}` : 'hint_default');
 
 // Los avisos de arranque salen en segundo plano: con la red saturada tardan minutos y
 // deploy-apply.sh solo espera READY_TIMEOUT a bot.ready (y luego vigila la unidad READY_GRACE s).
@@ -727,19 +729,19 @@ if (existsSync(DEPLOY_NOTICE)) {
   const notice = readFileSync(DEPLOY_NOTICE, 'utf8').trim();
   // El fichero se borra al enviarse: si un SIGUSR2 corta el arranque antes, el aviso sigue ahí.
   if (cfg.ownerId && notice) {
-    notices.push({ label: 'Aviso de despliegue', send: async () => { await say(`Bot actualizado a ${notice}`); unlinkSync(DEPLOY_NOTICE); } });
+    notices.push({ label: 'Aviso de despliegue', send: async () => { await say(t('deployed', { notice })); unlinkSync(DEPLOY_NOTICE); } });
   } else {
     unlinkSync(DEPLOY_NOTICE);
   }
 }
 if (cfg.ownerId && store.recovered) {
-  notices.push({ label: 'Aviso de state.json dañado', send: () => say(`state.json estaba dañado y arranqué sin trabajo. La copia está en ${store.recovered}.`) });
+  notices.push({ label: 'Aviso de state.json dañado', send: () => say(t('stateCorrupt', { path: store.recovered })) });
 }
 if (cfg.ownerId && store.job) {
   // Valores capturados ahora: el aviso puede salir minutos después, con el trabajo ya cambiado.
   const { site, phase } = store.job;
-  const hint = RESTART_HINT[phase] ?? 'Escribe «sigue» para continuar o /cerrar.';
-  notices.push({ label: 'Aviso de trabajo abierto', send: () => say(`Bot reiniciado. Trabajo abierto en ${site}, fase ${PHASE_LABEL[phase]}. ${hint}`) });
+  const hint = restartHint(phase);
+  notices.push({ label: 'Aviso de trabajo abierto', send: () => say(t('restarted', { site, phase: phaseLabel(phase), hint })) });
 }
 void sendNotices(notices);
 // El lote guardado no se anuncia al arrancar ni rearma el temporizador: sin trabajo abierto,
