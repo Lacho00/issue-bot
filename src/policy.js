@@ -31,14 +31,19 @@ export function BASH_ALLOW(phase) {
     'Bash(wp post meta list:*)',
     'Bash(wp theme list:*)',
     'Bash(wp plugin list:*)',
-    'Bash(chromium --headless:*)',
+    ...BROWSERS.map((b) => `Bash(${b} --headless:*)`),
   ];
 }
+
+// Nombres del binario de Chromium según la distribución (CHROMIUM_BIN elige cuál usa Claude). Todos
+// pasan por las mismas reglas: solo --headless, banderas de la lista y URLs http(s).
+export const BROWSERS = ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'];
+const BROWSER_SEGMENT = new RegExp(`^(?:${BROWSERS.join('|')})\\s`);
 
 // Bash corre en el sandbox de Claude Code (bwrap): escribe solo en el sitio y la carpeta del trabajo,
 // sin red, y se aprueba solo. wp necesita el socket de MySQL y chromium el loopback del sitio local:
 // van fuera del sandbox y los gobiernan la lista del bot y el hook.
-export const UNSANDBOXED = ['wp', 'chromium'];
+export const UNSANDBOXED = ['wp', ...BROWSERS];
 
 const HOOK_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const HOOK_SCRIPT = fileURLToPath(new URL('./policy-hook.js', import.meta.url));
@@ -276,7 +281,7 @@ function bashDecision(command, ctx) {
   for (const seg of segments) {
     if (inBotList(seg, ctx.phase)) {
       if (/^wp\s/.test(seg) && WP_RISKY.test(seg)) return ask('wp con --exec, --require, --ssh o --http');
-      if (/^chromium\s/.test(seg) && !chromiumOk(seg, ctx)) return ask('chromium con banderas o destinos fuera de lo permitido');
+      if (BROWSER_SEGMENT.test(seg) && !chromiumOk(seg, ctx)) return ask('chromium con banderas o destinos fuera de lo permitido');
     } else if (stdinFilterOk(seg)) {
       viaReadOnly = true;
     } else {
@@ -362,7 +367,7 @@ export function grantKeys(toolName, input = {}) {
     if (segments?.length !== 1) return null;
     const words = tokenize(segments[0]);
     const base = words[0];
-    if (!base || base.includes('=') || base.includes('/') || base === 'chromium') return null;
+    if (!base || base.includes('=') || base.includes('/') || BROWSERS.includes(base)) return null;
     const sub = words.slice(1).filter((w) => !w.startsWith('-'));
     if (base === 'wp') {
       if (WP_RISKY.test(segments[0]) || !sub[0] || WP_NO_GRANT.has(sub[0])) return null;

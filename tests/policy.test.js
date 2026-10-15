@@ -419,3 +419,16 @@ test('grantKeys: una orden suelta, con subcomando en wp/git/npm; sin botón en l
   assert.deepEqual(grantKeys('Write', { file_path: '/home/user/audits/s/results/q/informe.md' }), ['edit:/home/user/audits/s/results/q']);
   assert.deepEqual(grantKeys('SendMessage', {}), ['SendMessage']);
 });
+
+test('hook: los otros nombres de Chromium siguen las mismas reglas que chromium', async () => {
+  const { BROWSERS, grantKeys } = await import('../src/policy.js');
+  const sbx = { ...imp, sandbox: true };
+  for (const b of BROWSERS) {
+    assert.equal(decisionOf(bash(`${b} --headless --renderer-cmd-prefix=/bin/sh https://example.com/`, sbx)), 'ask', b);
+    assert.equal(decisionOf(bash(`${b} --headless --dump-dom file:///etc/passwd`, sbx)), 'deny', b);
+    assert.equal(bash(`${b} --headless --dump-dom https://example.com/`, sbx), null, b);
+    assert.equal(grantKeys('Bash', { command: `${b} --headless https://x/` }), null, b);
+  }
+  // Un nombre parecido no sale del sandbox: lo gobierna el sandbox, no la lista.
+  assert.equal(decisionOf(bash('chromium-browserx --headless https://example.com/', sbx)), 'fallthrough');
+});

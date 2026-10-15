@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, rmSync, existsSync } from 'nod
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
+import { BROWSERS } from './policy.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -52,6 +53,8 @@ export function loadConfig(envPath = path.join(ROOT, '.env')) {
     vhostDir: env.VHOST_DIR || '/etc/httpd/conf/extra',
     auditsRoot: env.AUDITS_ROOT || path.join(os.homedir(), 'audits'),
     claudeBin: env.CLAUDE_BIN || 'claude',
+    // Solo un nombre de la lista de la política: es el que Claude lanza fuera del sandbox.
+    chromiumBin: env.CHROMIUM_BIN || 'chromium',
     statePath: path.join(ROOT, 'state.json'),
     socketPath: env.BOT_SOCKET || path.join(ROOT, 'bot.sock'),
     turnTimeoutMs: 45 * 60 * 1000,

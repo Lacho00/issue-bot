@@ -1,4 +1,4 @@
-const COMMON = ({ site, sitePath, jobDir }) => `
+const COMMON = ({ site, sitePath, jobDir, browser = 'chromium' }) => `
 Trabajas en modo desatendido para un bot de Telegram. El dueño solo te lee por Telegram.
 Sitio: ${site} (${sitePath}). Carpeta del trabajo: ${jobDir}. Capturas del dueño: ${jobDir}/img/.
 Escribe en español, frases cortas, sin tablas decorativas. Telegram no renderiza Markdown complejo:
@@ -10,7 +10,7 @@ Cada permiso que no esté cubierto le llega al dueño como un botón en Telegram
 - Para medir o capturar el sitio usa las herramientas mcp__playwright, no scripts de node ni python.
 - Bash corre en un sandbox sin red: solo escribe en el sitio y en la carpeta del trabajo, y lo de
   dentro se aprueba solo. Para recortar capturas usa magick ahí dentro.
-- wp y chromium corren fuera del sandbox: lánzalos solos, desde la raíz del sitio y sin --path.`;
+- wp y ${browser} corren fuera del sandbox: lánzalos solos, desde la raíz del sitio y sin --path.`;
 
 const PLAN = `
 FASE: PLAN (solo lectura). No edites ni crees archivos.

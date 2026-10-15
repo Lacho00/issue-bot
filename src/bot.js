@@ -12,7 +12,7 @@ import { authorizeMessage, authorizeCallback, isForwarded } from './auth.js';
 import { resolveSite } from './sites.js';
 import { makeJobDir, localDate } from './jobdir.js';
 import { Store, StateError } from './state.js';
-import { buildSettings, decidePermission, describeRequest, grantKeys, siteDisablesHooks, siteWeakensSandbox } from './policy.js';
+import { BROWSERS, buildSettings, decidePermission, describeRequest, grantKeys, siteDisablesHooks, siteWeakensSandbox } from './policy.js';
 import { systemPrompt, userMessage } from './prompts.js';
 import { buildArgs, startTurn, statusFromEvent } from './runner.js';
 import { startBridge } from './permission-bridge.js';
@@ -31,6 +31,10 @@ net.setDefaultAutoSelectFamilyAttemptTimeout(5000);
 const cfg = loadConfig();
 if (!cfg.token) {
   console.error('Falta TELEGRAM_TOKEN en .env');
+  process.exit(1);
+}
+if (!BROWSERS.includes(cfg.chromiumBin)) {
+  console.error(`CHROMIUM_BIN tiene que ser uno de: ${BROWSERS.join(', ')}`);
   process.exit(1);
 }
 
@@ -560,7 +564,7 @@ async function runTurn() {
         sessionId: job.sessionId,
         resume: job.started,
         mode: phase === 'plan' ? 'plan' : 'manual',
-        systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir }),
+        systemPrompt: systemPrompt({ phase, site: job.site, sitePath: job.sitePath, jobDir: job.jobDir, browser: cfg.chromiumBin }),
         settings: buildSettings({ phase, sitePath: job.sitePath, jobDir: job.jobDir, botEnvPath: cfg.envPath, botDir: ROOT, nodeBin: process.execPath }),
         mcpConfig: { mcpServers: { bot: { command: process.execPath, args: [path.join(ROOT, 'src', 'mcp-permission.js')], env: { BOT_SOCKET: cfg.socketPath } } } },
       });
