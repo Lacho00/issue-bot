@@ -2,13 +2,17 @@
 
 [English](README.md) · Español
 
+**¿Primera vez? Lee la [guía paso a paso](docs/GUIDE.es.md)** (también en [inglés](docs/GUIDE.md)).
+
 Bot de Telegram que recibe issues de un sitio de `/srv/http`, acuerda un plan por chat,
 aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y después.
 
 ## Instalación
 
-Requiere `claude` instalado y con sesión iniciada (`claude login`) para el usuario
-que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
+Requiere Linux con servicios de usuario de systemd, Node.js 22 o posterior, `bwrap`, WP-CLI (`wp`),
+Chromium e ImageMagick (`magick`). Recomendado: el servidor MCP de Playwright. Y `claude`
+instalado y con sesión iniciada (`claude login`) para el usuario que ejecuta el servicio: el bot
+lo invoca sin terminal para atender cada turno.
 
 1. `npm install`
 2. Crear `.env` (permisos 600):
@@ -22,27 +26,35 @@ que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
    Claves opcionales, con sus valores por defecto:
 
    ```
+   BOT_LANG=es
    SITES_ROOT=/srv/http
    AUDITS_ROOT=~/audits
    CLAUDE_BIN=claude
+   CHROMIUM_BIN=chromium
    BOT_SOCKET=<carpeta del bot>/bot.sock
    BATCH_IDLE_MS=120000
    VHOST_DIR=/etc/httpd/conf/extra
    ```
 
+   `BOT_LANG`: `es` o `en`. Idioma de los mensajes del bot, de las respuestas de Claude y del
+   informe HTML.
+   `CHROMIUM_BIN`: `chromium`, `chromium-browser`, `google-chrome` o `google-chrome-stable`; con
+   otro valor el bot sale al arrancar (el paquete snap de Ubuntu es `chromium-browser`).
    `BATCH_IDLE_MS`: milisegundos sin mensajes nuevos tras los que se cierra el lote.
    `VHOST_DIR`: carpeta de los vhosts de Apache (`httpd-*.conf`) que se usan para detectar el sitio.
 
-3. Escribir al bot en privado. El primer mensaje registra tu user ID en `OWNER_ID`.
-4. Servicio:
+3. Servicio:
 
    ```
-   mkdir -p ~/.config/systemd/user
-   ln -sf "$PWD"/systemd/issue-bot.service ~/.config/systemd/user/
-   systemctl --user daemon-reload
-   systemctl --user enable --now issue-bot
+   bin/install-service.sh
    loginctl enable-linger "$USER"   # para que arranque sin sesión abierta
    ```
+
+   El script escribe `~/.config/systemd/user/issue-bot.service` a partir de
+   `systemd/issue-bot.service.in` con la ruta real del clon, recarga systemd y ejecuta
+   `enable --now`. Con `--no-start` solo escribe la unidad. Vuelve a ejecutarlo si mueves el clon.
+
+4. Escribir al bot en privado. El primer mensaje registra tu user ID en `OWNER_ID`.
 
    La unidad arranca `bin/start.sh`, que usa el node del alias `default` de nvm (o el del
    `PATH` si no hay nvm). Si el bot cae por un fallo inesperado sale con código 70 y systemd lo
@@ -92,6 +104,8 @@ hacer push a `main` (ver `CLAUDE.md`). GitHub Actions pasa los tests en cada PR 
 - Los reenvíos que llegan mientras Claude trabaja, o con un plan sin aprobar, se guardan para el
   siguiente lote («Guardado para el siguiente lote»).
 - `/estado`, `/cancelar`, `/cerrar`. Sin trabajo abierto, `/cerrar` descarta el lote guardado.
+- Los alias en inglés funcionan también: `/new <sitio>`, `/status`, `/cancel`, `/close`, y
+  «that's all» cierra el lote.
 - Al arrancar, el bot solo escribe si hay despliegue nuevo o trabajo abierto. Un lote guardado sin
   sitio no se anuncia: lo retoman `/plan` o el siguiente mensaje.
 
@@ -111,8 +125,6 @@ Trátalo como un acceso remoto a esa máquina:
 - **No hay commits ni push.** Los cambios se quedan en el árbol de trabajo del sitio para que
   los revises tú. La política de abajo deniega `git commit`, `push` y las órdenes destructivas.
 - **Pensado para local.** Úsalo sobre copias de desarrollo, no sobre producción.
-- La unidad de systemd y `bin/` asumen el clon en `/srv/http/issue-bot`. Si lo pones en otra
-  carpeta, ajusta `WorkingDirectory` y `ExecStart`.
 
 ## Permisos
 
