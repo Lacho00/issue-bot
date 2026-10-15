@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { buildSettings, decidePermission, describeRequest } from '../src/policy.js';
 
 test('settings permiten editar solo en el sitio y en la carpeta del trabajo', () => {
-  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(s.permissions.allow.includes('Edit(//srv/http/tienda-demo/**)'));
-  assert.ok(s.permissions.allow.includes('Write(//home/lacho/audits/tienda-demo/results/qa-2026-09-21/**)'));
+  assert.ok(s.permissions.allow.includes('Write(//home/user/audits/tienda-demo/results/qa-2026-09-21/**)'));
   assert.ok(!s.permissions.allow.some((r) => r.startsWith('Edit(//srv/http/**')));
   assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
   assert.ok(s.permissions.deny.includes('Bash(git commit:*)'));
@@ -14,21 +14,21 @@ test('settings permiten editar solo en el sitio y en la carpeta del trabajo', ()
 });
 
 test('plan: sin Edit/Write/MultiEdit ni npm run build', () => {
-  const s = buildSettings({ phase: 'plan', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'plan', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(!s.permissions.allow.some((r) => /^(Edit|Write|MultiEdit)\(/.test(r)));
   assert.ok(!s.permissions.allow.includes('Bash(npm run build)'));
   assert.ok(!s.permissions.allow.includes('Bash(npm run build:*)'));
 });
 
 test('implement: sí incluye Edit/Write/MultiEdit y npm run build', () => {
-  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(s.permissions.allow.includes('Edit(//srv/http/tienda-demo/**)'));
   assert.ok(s.permissions.allow.includes('MultiEdit(//srv/http/tienda-demo/**)'));
   assert.ok(s.permissions.allow.includes('Bash(npm run build)'));
 });
 
 test('playwright: solo herramientas explícitas, sin run_code_unsafe ni file_upload', () => {
-  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(!s.permissions.allow.includes('mcp__playwright'));
   assert.ok(s.permissions.allow.includes('mcp__playwright__browser_navigate'));
   assert.ok(s.permissions.allow.includes('mcp__playwright__browser_snapshot'));
@@ -38,14 +38,14 @@ test('playwright: solo herramientas explícitas, sin run_code_unsafe ni file_upl
 });
 
 test('codebase-memory: solo herramientas de lectura, sin wildcard', () => {
-  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(!s.permissions.allow.includes('mcp__codebase-memory-mcp'));
   assert.ok(s.permissions.allow.includes('mcp__codebase-memory-mcp__search_graph'));
   assert.ok(s.permissions.allow.includes('mcp__codebase-memory-mcp__trace_path'));
 });
 
 test('deniega leer el .env del propio bot', () => {
-  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
+  const s = buildSettings({ phase: 'implement', sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' });
   assert.ok(s.permissions.deny.includes('Read(//srv/http/issue-bot/.env)'));
 });
 
@@ -75,7 +75,7 @@ test('describeRequest resume comando o ruta', () => {
   assert.ok(describeRequest('Otro', { a: 'x'.repeat(2000) }).length <= 700);
 });
 
-const SETTINGS_ARGS = { sitePath: '/srv/http/tienda-demo', jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' };
+const SETTINGS_ARGS = { sitePath: '/srv/http/tienda-demo', jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21', botEnvPath: '/srv/http/issue-bot/.env' };
 
 test('settings: deny de git y wp db destructivos en ambas fases, sin perder los de antes', () => {
   const rules = [
@@ -118,7 +118,7 @@ import { hookDecision, BASH_ALLOW } from '../src/policy.js';
 
 const CTX = {
   sitePath: '/srv/http/tienda-demo',
-  jobDir: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21',
+  jobDir: '/home/user/audits/tienda-demo/results/qa-2026-09-21',
   botDir: '/srv/http/bot-sandbox',
 };
 const imp = { ...CTX, phase: 'implement' };
@@ -245,14 +245,14 @@ test('hook: chromium con banderas fuera de la lista o salida fuera del sitio se 
   ]) {
     assert.equal(decisionOf(bash(command)), 'ask', command);
   }
-  assert.equal(bash('chromium --headless --screenshot=/home/lacho/audits/tienda-demo/results/qa-2026-09-21/img/a.png https://example.com/'), null);
+  assert.equal(bash('chromium --headless --screenshot=/home/user/audits/tienda-demo/results/qa-2026-09-21/img/a.png https://example.com/'), null);
 });
 
 test('hook: Edit/Write deniega .claude, .git y el directorio del bot', () => {
   for (const [tool, file_path] of [
     ['Edit', '/srv/http/tienda-demo/.claude/settings.json'], ['Write', '/srv/http/tienda-demo/.claude/settings.local.json'],
     ['MultiEdit', '/srv/http/tienda-demo/.git/config'], ['Write', '/srv/http/tienda-demo/.git/hooks/pre-commit'],
-    ['Write', '/srv/http/tienda-demo/wp-content/themes/t/.git/config'], ['Write', '/home/lacho/.claude/settings.json'],
+    ['Write', '/srv/http/tienda-demo/wp-content/themes/t/.git/config'], ['Write', '/home/user/.claude/settings.json'],
     ['Edit', '/srv/http/bot-sandbox/src/policy.js'], ['Write', '/srv/http/bot-sandbox/.env'],
     ['Edit', '.claude/settings.json'], ['Write', '/srv/http/tienda-demo/sub/../.git/config'],
   ]) {
@@ -269,13 +269,13 @@ test('hook: package.json y composer.json siempre se preguntan', () => {
 
 test('hook: en plan toda edición se pregunta', () => {
   assert.equal(decisionOf(hookDecision('Edit', { file_path: '/srv/http/tienda-demo/style.css' }, plan)), 'ask');
-  assert.equal(decisionOf(hookDecision('Write', { file_path: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21/informe.md' }, plan)), 'ask');
+  assert.equal(decisionOf(hookDecision('Write', { file_path: '/home/user/audits/tienda-demo/results/qa-2026-09-21/informe.md' }, plan)), 'ask');
 });
 
 test('hook: en implementación, dentro del sitio o del trabajo sigue el flujo; fuera se pregunta', () => {
   assert.equal(hookDecision('Edit', { file_path: '/srv/http/tienda-demo/wp-content/themes/t/style.css' }, imp), null);
   assert.equal(hookDecision('Edit', { file_path: 'wp-content/themes/t/style.css' }, imp), null);
-  assert.equal(hookDecision('Write', { file_path: '/home/lacho/audits/tienda-demo/results/qa-2026-09-21/informe.md' }, imp), null);
+  assert.equal(hookDecision('Write', { file_path: '/home/user/audits/tienda-demo/results/qa-2026-09-21/informe.md' }, imp), null);
   for (const file_path of ['/srv/http/tienda-demo-2/style.css', '/etc/hosts', '/srv/http/tienda-demo/../otro/a.php', '']) {
     assert.equal(decisionOf(hookDecision('Write', { file_path }, imp)), 'ask', file_path);
   }
@@ -416,6 +416,6 @@ test('grantKeys: una orden suelta, con subcomando en wp/git/npm; sin botón en l
   for (const command of ['wp post list | head -3', 'echo $(x)', 'FOO=1 node x', './x.sh', 'chromium --headless https://x/', 'wp eval "1"', 'wp db query "DELETE"', 'wp option get x --exec=1', 'wp']) {
     assert.equal(grantKeys('Bash', { command }), null, command);
   }
-  assert.deepEqual(grantKeys('Write', { file_path: '/home/lacho/audits/s/results/q/informe.md' }), ['edit:/home/lacho/audits/s/results/q']);
+  assert.deepEqual(grantKeys('Write', { file_path: '/home/user/audits/s/results/q/informe.md' }), ['edit:/home/user/audits/s/results/q']);
   assert.deepEqual(grantKeys('SendMessage', {}), ['SendMessage']);
 });

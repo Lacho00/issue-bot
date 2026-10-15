@@ -1,147 +1,152 @@
 # issue-bot
 
-Bot de Telegram que recibe issues de un sitio de `/srv/http`, acuerda un plan por chat,
-aplica el arreglo en local con Claude Code y devuelve un informe HTML de antes y después.
+English · [Español](README.es.md)
 
-## Instalación
+A Telegram bot that takes QA issues for a local WordPress site, agrees a fix plan over chat,
+applies the fix with Claude Code and sends back an HTML before/after report.
 
-Requiere `claude` instalado y con sesión iniciada (`claude login`) para el usuario
-que ejecuta el servicio: el bot lo invoca sin terminal para atender cada turno.
+Forward the QA messages (text, screenshots, albums) to the bot. It works out which site they
+belong to, collects them into a batch, proposes a plan, waits for your approval, runs Claude Code
+under a strict permission policy, and replies with a report: one card per issue, the QA's
+screenshot next to Claude's.
+
+## How it works
+
+1. **Detect the site.** The bot pulls host names from the URLs in the messages and looks them up
+   in each site's `.wp-create.json` (`project.domain`, `wordpress.url`, `wordpress.url_origin`)
+   and in the Apache vhosts (`ServerName`, `ServerAlias`). One match opens the job. Several
+   matches, or none, show buttons to choose. It never creates a site or guesses one.
+2. **Collect the batch.** The batch closes after 2 minutes without new messages, or at once with
+   `/plan`.
+3. **Agree the plan.** Claude reads the site and proposes a plan. Discuss it in the chat, then press
+   **Aprobar plan** (approve plan).
+4. **Fix and report.** Claude applies the fix and writes `informe.json`. The bot renders it as
+   `informe-<site>-<date>.html`, with status KPIs and a card per issue with the **Before** and
+   **After** screenshots side by side.
+5. **Follow up.** Anything you type afterwards is a correction and starts a new round of the same
+   job. A new forward is a new QA batch.
+
+Commands: `/nuevo <site>`, `/plan`, `/estado`, `/cancelar`, `/cerrar`. The bot speaks Spanish.
+
+## Requirements
+
+- Node.js 22 or later.
+- `claude` (Claude Code) installed and logged in (`claude login`) for the user that runs the bot.
+  The bot runs it headless for each turn.
+- Linux with systemd for the service, and `bwrap` for the Claude Code sandbox.
+- Sites under one folder (`/srv/http` by default), served locally.
+
+## Install
 
 1. `npm install`
-2. Crear `.env` (permisos 600):
+2. Create `.env` with mode 600:
 
    ```
-   TELEGRAM_TOKEN=<token de BotFather>
+   TELEGRAM_TOKEN=<token from BotFather>
    OWNER_ID=
    CHAT_ID=
    ```
 
-   Claves opcionales, con sus valores por defecto:
+   Optional keys and their defaults:
 
    ```
    SITES_ROOT=/srv/http
-   AUDITS_ROOT=/home/lacho/audits
+   AUDITS_ROOT=~/audits
    CLAUDE_BIN=claude
-   BOT_SOCKET=<carpeta del bot>/bot.sock
+   BOT_SOCKET=<bot folder>/bot.sock
    BATCH_IDLE_MS=120000
    VHOST_DIR=/etc/httpd/conf/extra
    ```
 
-   `BATCH_IDLE_MS`: milisegundos sin mensajes nuevos tras los que se cierra el lote.
-   `VHOST_DIR`: carpeta de los vhosts de Apache (`httpd-*.conf`) que se usan para detectar el sitio.
+   `AUDITS_ROOT` is where each job's folder and report go. `VHOST_DIR` holds the Apache vhosts
+   (`httpd-*.conf`) used to detect the site.
 
-3. Escribir al bot en privado. El primer mensaje registra tu user ID en `OWNER_ID`.
-4. Servicio:
+3. Message the bot privately. The first message registers your user ID as `OWNER_ID`.
+4. Install the service:
 
    ```
    mkdir -p ~/.config/systemd/user
-   ln -sf /srv/http/issue-bot/systemd/issue-bot.service ~/.config/systemd/user/
+   ln -sf "$PWD"/systemd/issue-bot.service ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now issue-bot
-   loginctl enable-linger "$USER"   # para que arranque sin sesión abierta
+   loginctl enable-linger "$USER"   # start without an open session
    ```
 
-   La unidad arranca `bin/start.sh`, que usa el node del alias `default` de nvm (o el del
-   `PATH` si no hay nvm). Si el bot cae por un fallo inesperado sale con código 70 y systemd lo
-   vuelve a arrancar; con código 1 (falta el token, no hay node) no lo reintenta.
+   The unit runs `bin/start.sh`, which uses nvm's `default` node, or the one on `PATH`. An
+   unexpected crash exits with code 70 and systemd restarts it with backoff. Exit code 1 (missing
+   token, no node) is not retried.
 
-## Despliegue
-
-`npm run deploy` (`bin/deploy.sh`) despliega `origin/main` en este clon:
-
-1. Exige que el clon esté en `main` y sin cambios en ficheros versionados.
-2. Pasa `npm test` sobre `origin/main` en un worktree temporal (`.deploy/`). Si falla, no
-   toca nada. Si el lockfile cambió, instala ahí el `node_modules` nuevo.
-3. Lanza `bin/deploy-apply.sh` en la unidad transitoria `issue-bot-deploy` y vuelve enseguida.
-4. `deploy-apply.sh` manda `SIGUSR2` al bot. El bot deja de abrir turnos y sale cuando no hay
-   turno ni mensaje en curso. Entonces avanza `main` con fast-forward, cambia `node_modules` si
-   hace falta y arranca el servicio. El árbol no cambia mientras corre un turno.
-5. Al arrancar, el bot avisa por Telegram: «Bot actualizado a <commit>». Si algo falla con el bot
-   parado, vuelve al commit anterior, lo arranca igual y el aviso dice por qué.
-
-Si el commit ya está desplegado no hace nada; `--force` lo repite. Seguimiento:
-`journalctl --user -u issue-bot-deploy`. No hay disparo automático: se lanza tras fusionar o
-hacer push a `main` (ver `CLAUDE.md`). GitHub Actions pasa los tests en cada PR y en cada push a
-`main` (`.github/workflows/test.yml`).
-
-## Uso
-
-- Reenvía al chat los mensajes de la QA (textos, capturas, álbumes). El bot saca los hosts de
-  las URLs y los busca en el `.wp-create.json` de cada sitio (`project.domain`,
-  `wordpress.url`, `wordpress.url_origin`) y en los vhosts de `VHOST_DIR` (`ServerName`,
-  `ServerAlias`). Si coincide un solo sitio abre el trabajo: «Trabajo abierto en X (detectado
-  por <host>)». Si coinciden varios, o el host no está en el índice, elige en los botones o
-  usa `/nuevo <sitio>`. El bot nunca crea sitios ni adivina uno.
-- `/nuevo <sitio>`: abre un trabajo sobre `/srv/http/<sitio>` a mano. Mientras el lote se está
-  recogiendo, gana a la detección.
-- El lote se cierra solo tras 2 minutos sin mensajes (`BATCH_IDLE_MS`), o en el acto con `/plan`
-  o «eso es todo». Si al cerrarse no hay sitio, el bot pregunta y conserva el lote.
-- Si reenvías algo de otro sitio con un lote abierto, el bot pregunta: **Cambiar a Y** o
-  **Añadir a X**.
-- Discute el plan por chat y pulsa **Aprobar plan**.
-- Recibes `informe-<sitio>-<fecha>.html` y una línea de estado por issue. Claude escribe
-  `informe.json` en la carpeta del trabajo y el bot lo convierte en HTML con el estilo del informe
-  de `/wp-audit`: KPIs por estado y una tarjeta por issue con el mensaje de la QA y las fotos
-  **Antes** (las de la QA) y **Después** (capturas de Claude) lado a lado. Si no hay
-  `informe.json`, usa `informe.md` como respaldo. Después:
-  - lo que escribas tú es una corrección: nueva ronda del mismo trabajo;
-  - un reenvío es un lote nuevo de QA: cierra el trabajo y abre otro para el sitio detectado.
-- Los reenvíos que llegan mientras Claude trabaja, o con un plan sin aprobar, se guardan para el
-  siguiente lote («Guardado para el siguiente lote»).
-- `/estado`, `/cancelar`, `/cerrar`. Sin trabajo abierto, `/cerrar` descarta el lote guardado.
-- Al arrancar, el bot solo escribe si hay despliegue nuevo o trabajo abierto. Un lote guardado sin
-  sitio no se anuncia: lo retoman `/plan` o el siguiente mensaje.
-
-Diseño: `docs/superpowers/specs/2026-09-21-telegram-issue-bot-design.md` y
-`docs/superpowers/specs/2026-09-22-qa-forward-flow-design.md`.
 Logs: `journalctl --user -u issue-bot -f`.
-Tras actualizar el código: `systemctl --user restart issue-bot`.
 
-## Permisos
+## Security
 
-Cada turno carga los settings del usuario, del proyecto y locales del sitio
-(`--setting-sources user,project,local`), así que el `CLAUDE.md` del sitio se carga solo, más la
-lista del bot. Como un settings del sitio puede permitir comandos por su cuenta, la política del
-bot la aplica un hook `PreToolUse` (`src/policy-hook.js`) que corre antes que cualquier allow:
+The bot runs Claude Code against your sites' files, driven by Telegram messages. Treat it as remote
+access to that machine.
 
-- Deniega `git commit`, `push`, `add`, `restore`, `checkout` (salvo `-b`), `reset --hard`,
-  `clean`, `diff --no-index` y `--output`; `wp db drop`, `reset` e `import`; instalar
-  Playwright; `file://`; y tocar el directorio del bot. Tampoco se edita nada bajo `.claude`
-  ni `.git`, ni el `.mcp.json` del sitio.
-- Bash corre en el sandbox de Claude Code (bwrap, `failIfUnavailable`). Dentro del sandbox no hay
-  red, y solo se escribe en el sitio y en la carpeta del trabajo; en la fase de plan, en ninguno de
-  los dos. Tampoco se escribe en `.git`, `.claude` ni `.mcp.json`, y no se lee el `.env` del bot.
-  Lo que corre ahí se aprueba solo, incluidos los comandos compuestos y los scripts (`magick`, `node`…).
-- `wp` y `chromium` corren fuera del sandbox: necesitan el socket de MySQL y el loopback del sitio
-  local. Pasan por la lista del bot. Si van compuestos, la primera orden tiene que estar en la
-  lista, y cada una de las demás también, o ser un filtro de la entrada estándar sin ficheros
-  (`head`, `tail`, `wc`, `grep <patrón>`).
-  Si hay `$(…)`, variables, subshell o redirecciones (salvo a `/dev/null` y `2>&1`), se pregunta.
-- También pregunta los cambios en `package.json`, `composer.json`, `.npmrc`,
-  `*.config.{js,cjs,mjs,ts}` y `wp-cli*.yml`,
-  toda edición en la fase de plan y, al implementar, la que caiga fuera del sitio y de la
-  carpeta del trabajo.
+- **One owner only.** With `OWNER_ID` empty, the first message the bot receives (private or in a
+  group) registers its sender as the owner. Start it and message it yourself right away, or set
+  `OWNER_ID` by hand before starting. After that it ignores every other user and every other chat.
+- **The token is the key.** Anyone with `TELEGRAM_TOKEN` can impersonate the bot. Keep `.env` at
+  mode 600 and out of the repo (it is in `.gitignore`).
+- **No commits, no push.** Changes stay in the site's working tree for you to review. The policy
+  below denies `git commit`, `push` and destructive commands.
+- **Meant for local copies.** Run it against development sites, not production.
+- The systemd unit and `bin/` scripts assume the clone lives at `/srv/http/issue-bot`. If it lives
+  elsewhere, change `WorkingDirectory` and `ExecStart`.
 
-Si los settings del sitio, del usuario o gestionados tienen `disableAllHooks` o cualquier clave
-`sandbox` (el sandbox lo define solo el bot), el bot no arranca el turno. Lo que no cubre ninguna
-lista se pide con los botones Permitir y Denegar. Debajo va un tercer botón, «Permitir … en este
-trabajo», solo para órdenes sueltas. Recuerda el comando base (con su subcomando en `git` y `npm`,
-y con dos en `wp`: `wp post list`), o la carpeta de la edición, hasta que se cierra el trabajo.
-No aparece para `chromium` ni para `wp eval`, `shell`, `db` o con `--exec`. Las prohibiciones siguen mandando. El
-recuerdo vive en memoria, así que un despliegue o un reinicio lo borra.
+## Permission policy
 
-## Grupo
+Each turn loads the user, project and local settings of the site
+(`--setting-sources user,project,local`) plus the bot's own list. Because a site's settings can
+allow commands on their own, the bot enforces its policy with a `PreToolUse` hook
+(`src/policy-hook.js`) that runs before any allow rule:
 
-El bot también puede hablar en un grupo de Telegram en vez de en privado:
+- **Denied:** `git commit`, `push`, `add`, `restore`, `checkout` (except `-b`), `reset --hard`,
+  `clean`, `diff --no-index` and `--output`; `wp db drop`, `reset` and `import`; installing
+  Playwright; `file://`; touching the bot's own folder; editing anything under `.claude` or
+  `.git`, or the site's `.mcp.json`.
+- **Sandboxed:** Bash runs in the Claude Code sandbox (bwrap, `failIfUnavailable`) with no
+  network. It can write only to the site and the job folder, and to neither during the plan
+  phase. It cannot read the bot's `.env`.
+- **Outside the sandbox:** `wp` and `chromium` need the MySQL socket and the site's loopback, so
+  they go through the bot's allow list. In a compound command every part must be on the list or
+  be a plain stdin filter (`head`, `tail`, `wc`, `grep <pattern>`). `$(…)`, variables, subshells
+  and redirections (other than to `/dev/null` and `2>&1`) are asked.
+- **Asked:** changes to `package.json`, `composer.json`, `.npmrc`, `*.config.{js,cjs,mjs,ts}`
+  and `wp-cli*.yml`; any edit during the plan phase; and, while implementing, any edit outside
+  the site and the job folder.
 
-1. Con BotFather, `/setprivacy` → **Disable** para este bot. Si no, en un grupo solo
-   recibe comandos (`/plan`, etc.), no textos sueltos ni capturas.
-2. Quita el bot del grupo y vuelve a añadirlo (para que el cambio de privacidad
-   surta efecto).
-3. El primer mensaje que el bot reciba en ese grupo registra a su remitente como
-   dueño (`OWNER_ID`) y ese chat como `CHAT_ID`. A partir de ahí solo atiende al
-   dueño y solo en ese chat (o en privado, si nunca se registró un grupo).
-4. El resto de personas del grupo pueden leer todo lo que el bot publique ahí.
-5. Los reenvíos que hace el dueño en ese chat se aceptan, venga de quien venga el mensaje
-   original. Los reenvíos de otras personas se ignoran.
+If the site, user or managed settings set `disableAllHooks` or any `sandbox` key, the bot refuses
+to start the turn. Anything no list covers is asked with **Permitir** and **Denegar** (allow, deny)
+buttons, plus **Permitir … en este trabajo** (allow in this job) for single commands, remembered in memory until the job closes. It is not
+offered for `chromium` or for `wp eval`, `shell`, `db` or `--exec`. Denials always win.
+
+## Group chats
+
+The bot can also work in a Telegram group:
+
+1. In BotFather, `/setprivacy` → **Disable** for this bot, or it only receives commands in
+   groups.
+2. Remove the bot from the group and add it again so the change applies.
+3. The first message the bot receives in that group registers its sender as `OWNER_ID` and the
+   chat as `CHAT_ID`. From then on it answers only the owner, only in that chat.
+4. Everyone in the group can read what the bot posts there.
+5. Forwards by the owner are accepted whoever wrote the original message. Forwards by anyone else
+   are ignored.
+
+## Deploy
+
+`npm run deploy` (`bin/deploy.sh`) runs the tests on `origin/main` in a temporary worktree, then
+asks the bot to restart once the current turn ends. If anything fails with the bot stopped, it
+goes back to the previous commit and starts it anyway. The bot announces the deployed commit on
+Telegram. GitHub Actions runs the tests on every PR and push to `main`.
+
+## Tests
+
+```
+npm test
+```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -2,6 +2,8 @@
   "name": "issue-bot",
   "version": "0.1.0",
   "private": true,
+  "description": "Telegram bot that takes a site issue, agrees a plan, fixes it locally with Claude Code and returns a before/after report.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "node src/bot.js",
