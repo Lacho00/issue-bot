@@ -1,3 +1,4 @@
+# Plantilla: bin/install-service.sh cambia @ROOT@ por la carpeta del clon y la instala.
 [Unit]
 Description=Bot de Telegram para issues de sitios
 # Sin límite de arranques: un corte de red largo hace fallar getMe en cada arranque, y el bot
@@ -6,8 +7,8 @@ Description=Bot de Telegram para issues de sitios
 StartLimitIntervalSec=0
 
 [Service]
-WorkingDirectory=/srv/http/issue-bot
-ExecStart=/srv/http/issue-bot/bin/start.sh
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/bin/start.sh
 Environment=PATH=/usr/local/bin:/usr/bin
 Restart=on-failure
 # Espera entre reintentos: de 10 s a 5 min en 5 pasos.
