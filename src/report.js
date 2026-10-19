@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
 import { createT } from './i18n.js';
+import { mascotSvg, reportMood } from './mascot.js';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml' };
 const IMG = /(<img\b[^>]*?\bsrc=")([^"]+)(")/gi;
@@ -64,6 +65,7 @@ pre{background:var(--na-bg);padding:10px 12px;border-radius:8px;overflow-x:auto}
 pre code{background:none;padding:0}
 img{max-width:100%;height:auto}
 .top{background:var(--paper);border-bottom:1px solid var(--rule);padding:34px 0 26px}
+.brand{display:flex;align-items:center;gap:16px} .mascot{flex:none}
 .kicker{margin:0;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}
 .meta{margin:2px 0;color:var(--muted);font-size:13.5px}
 .kpis{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px}
@@ -132,7 +134,7 @@ figcaption{color:var(--muted);font-size:12.5px;margin-top:6px;text-align:center}
 footer.wrap{color:var(--muted);font-size:12.5px;padding-bottom:36px}
 @media (max-width:720px){
   .wrap{padding:0 14px} main.wrap{padding:18px 14px 40px} section{padding:16px}
-  h1{font-size:24px} .kpi.big b{font-size:28px} .ba{grid-template-columns:1fr}
+  h1{font-size:24px} .mascot{width:56px;height:auto} .kpi.big b{font-size:28px} .ba{grid-template-columns:1fr}
 }
 @media print{
   :root,:root:has(#theme:checked){${TOKENS_LIGHT}}
@@ -172,7 +174,7 @@ export function renderReport(md, { title, lang = 'es' } = {}) {
   return page({
     t: tr,
     title: t,
-    headerHtml: `<p class="kicker">${tr('report.kicker')}</p>\n<h1>${escapeHtml(t)}</h1>`,
+    headerHtml: `<div class="brand">${mascotSvg()}<div>\n<p class="kicker">${tr('report.kicker')}</p>\n<h1>${escapeHtml(t)}</h1>\n</div></div>`,
     mainHtml: `<section>\n${wrapTables(marked.parse(md ?? ''))}\n</section>`,
   });
 }
@@ -289,9 +291,11 @@ export function renderQaReport(report, { site, date, lang = 'es' } = {}) {
     const n = count(k);
     return `<div class="kpi"><b class="${n ? STATUSES[k].tone : 'na'}">${n}</b><span>${escapeHtml(t(`statusPlural.${k}`))}</span></div>`;
   };
-  const header = `<p class="kicker">${t('report.kicker')}</p>
+  const header = `<div class="brand">${mascotSvg(reportMood(issues.map((issue) => statusKey(issue.status))))}<div>
+<p class="kicker">${t('report.kicker')}</p>
 <h1>${escapeHtml(s || title)}</h1>
 <p class="meta">${escapeHtml([d, report.branch].filter(Boolean).join(' · '))}</p>
+</div></div>
 <div class="kpis">
 <div class="kpi big"><b>${issues.length}</b><span>${issues.length === 1 ? t('report.issue') : t('report.issues')}</span></div>
 ${Object.keys(STATUSES).map(kpi).join('\n')}

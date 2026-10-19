@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<rect width="1024" height="1024" fill="#0F172A"/>
+<g transform="translate(0 72)">
+<path d="M512 350V268" stroke="#F8FAFC" stroke-width="40" stroke-linecap="round"/>
+<g stroke="#F59E0B" stroke-width="24" stroke-linecap="round" fill="none"><path d="M486 168Q470 140 446 130M538 168Q554 140 578 130"/><path d="M462 214L428 200M562 214L596 200M458 242L424 256M566 242L600 256"/></g>
+<ellipse cx="512" cy="212" rx="52" ry="64" fill="#F59E0B"/>
+<path d="M512 152V272" stroke="#0F172A" stroke-width="12"/>
+<rect x="160" y="500" width="64" height="160" rx="32" fill="#F59E0B"/>
+<rect x="800" y="500" width="64" height="160" rx="32" fill="#F59E0B"/>
+<rect x="222" y="350" width="580" height="400" rx="120" fill="#F8FAFC"/>
+<rect x="276" y="448" width="472" height="206" rx="103" fill="#0F172A"/>
+<path d="M360 500L440 476M664 500L584 476" stroke="#EF4444" stroke-width="22" stroke-linecap="round"/>
+<circle cx="408" cy="556" r="36" fill="#EF4444"/><circle cx="616" cy="556" r="36" fill="#EF4444"/>
+<path d="M462 624Q487 604 512 624T562 624" fill="none" stroke="#EF4444" stroke-width="20" stroke-linecap="round"/>
+<path d="M770 390Q790 425 790 440A20 20 0 0 1 750 440Q750 425 770 390Z" fill="#7DD3FC"/>
+</g>
+</svg>

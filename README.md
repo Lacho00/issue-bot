@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/logo-mark.svg" width="160" alt=""></p>
+
 # issue-bot
 
 English · [Español](README.es.md)
